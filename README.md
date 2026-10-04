@@ -198,3 +198,56 @@ ID join, date filter, field allowlist, missing values/coordinates, selection, ge
 pagination, empty layers, and partial/network failures. A local-input test checks the
 49 real records and unchanged ranks. Point-enrichment tests cover known distances,
 invalid coordinates, deterministic ties, separate proximity ranks, and refresh.
+
+### Bounded AI boundary review
+
+The optional agent review uses OpenAI Chat Completions with strict JSON Schema,
+default model `gpt-4.1-mini` (`OPENAI_MODEL` can override it). It uses the existing
+`requests` dependency. Configure `OPENAI_API_KEY` in the environment that launches
+Streamlit, then restart the server. The app also automatically loads the project-root
+`.env` using `python-dotenv`; existing process variables take precedence. Install
+updated requirements before restarting. Put `OPENAI_API_KEY` and optionally
+`OPENAI_MODEL=gpt-4.1-mini` in that local file. `.env` and `.env.*` are Git-ignored;
+keys stay server-side and are never included in prompts, UI tables or trace downloads.
+Do not commit credentials or paste them into chat.
+For a session-only PowerShell setup without putting the key in command history:
+
+```powershell
+$reviewSecret = Read-Host 'OpenAI API key' -AsSecureString
+$env:OPENAI_API_KEY = [System.Net.NetworkCredential]::new('', $reviewSecret).Password
+Remove-Variable reviewSecret
+& "$mapEnv\Scripts\python.exe" -m streamlit run streamlit_app.py
+```
+
+`Run agent review` sends one request, with a 10-second connection timeout and
+60-second read timeout, no tools and no automatic retries. Missing credentials
+disable the button. API failure, refusal, incomplete output, or invalid JSON
+preserves the original allocation. The agent receives only the last-kept fire and
+shortlisted no-crew challengers: IDs, annual/daily RF ranks, probability, baseline
+rank, initial assessment/weather/fire-characteristic fields, nearest community,
+distance, proximity rank, review reasons and saved status. Coordinates and arbitrary
+source columns are excluded, including `y`, `CURRENT_SIZE` and future outcomes.
+
+The exact response keys are `decision`, `promote_fire_id`, `displace_fire_id`,
+`reason`, and `evidence`. `KEEP_ORIGINAL` requires null IDs. A `SWAP` must promote
+one shortlisted `displaced`/`no_crew` fire and displace only the saved last-kept fire.
+Code independently validates the response and simulates two changed crew flags
+(one crew transfer), with exactly `H_cut` assignments and no rank/status mutations.
+The prompt prefers keeping RF allocation when evidence is ambiguous; proximity
+alone is insufficient, and no numeric thresholds or causal RF explanations are invented.
+
+A valid swap is a proposal until you click **Apply swap**. Application revalidates
+the proposal and changes a separate session-only crew-assignment map. The UI shows
+before/after assignments and final allocation alongside unchanged saved statuses.
+Saved CSVs and RF ranks are never rewritten. Apply is disabled after application.
+A new review starts from saved allocation; community Refresh, source-file changes,
+or model/input changes invalidate the review and restore original session allocation.
+
+`Download agent review trace` preserves sanitized input, policy/version, model,
+raw structured response, validation result and final assignments/action. No API
+keys or headers are included. Trace/session state lasts only for the browser session
+unless downloaded. `app/agent_review.py` isolates the API, `app/agent_validation.py`
+validates/applies copies, and `app/agent_view.py` implements the explicit review UI.
+Offline tests mock KEEP, SWAP, invalid/API failures, missing credentials, explicit
+application and stale-review handling. A live decision requires a configured API key;
+it is not inferred from offline test responses.

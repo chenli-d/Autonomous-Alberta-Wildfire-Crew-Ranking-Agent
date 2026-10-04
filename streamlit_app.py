@@ -13,6 +13,8 @@ from app.map_view import create_map, create_overview_map
 from app.ranking_service import AVAILABLE_DATES, load_rankings, map_record
 from app.proximity_service import enrich_fire_proximity, valid_community_points, find_nearest_community_points
 from app.review_service import load_allocation_context, attach_allocation_context, select_review_candidates
+from app.agent_view import show_agent_review
+from app.config import load_local_environment
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading Alberta communities…")
@@ -43,12 +45,21 @@ def show_review_candidates(records, root, selected_day):
     try:
         context = load_review_context(str(allocation_path), allocation_path.stat().st_mtime_ns,
                                       str(metadata_path), metadata_path.stat().st_mtime_ns, selected_day)
-        candidates = select_review_candidates(attach_allocation_context(records, context), context["H"], context["H_cut"])
+        context = {**context, "source_versions": [
+            path.stat().st_mtime_ns for path in (allocation_path, metadata_path,
+                root / "outputs/dev_recent/ranking_2024.csv",
+                root / "data/raw/fp-historical-wildfire-data-2006-2025.csv")]}
+        allocated_records = attach_allocation_context(records, context)
+        candidates = select_review_candidates(allocated_records, context["H"], context["H_cut"])
     except (OSError, ValueError, KeyError, TypeError, csv.Error) as error:
+        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
+            st.session_state.pop(key, None)
         st.warning(f"Review shortlist unavailable: {error}")
         return
     st.caption(f"H = {context['H']}; H_cut = {context['H_cut']}; {len(candidates)} review candidates.")
     if not candidates:
+        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
+            st.session_state.pop(key, None)
         st.info("No review candidates available.")
         return
     st.dataframe([{"fire_id": record["fire_id"], "Daily allocation RF rank": record["allocation_rank"],
@@ -57,6 +68,7 @@ def show_review_candidates(records, root, selected_day):
                    "Distance (km)": record.get("nearest_community_distance_km") if record.get("nearest_community_distance_km") is not None else "N/A",
                    "Review reasons": ", ".join(record["review_reason"])} for record in candidates], hide_index=True,
                  column_config={"Distance (km)": st.column_config.NumberColumn(format="%.2f")})
+    show_agent_review(allocated_records, candidates, context)
 
 
 def show_fire_details(record):
@@ -77,6 +89,7 @@ def show_fire_details(record):
 
 
 def main():
+    load_local_environment()
     st.set_page_config(page_title="Alberta wildfire community proximity", layout="wide")
     st.title("Alberta wildfire community proximity")
     st.caption("Deterministic point-to-point distances to Alberta Hamlet/Locality/Townsite points (layer 0). Cities and towns supplied as municipal polygons are not included. Proximity rank does not change RF ranking.")
@@ -90,6 +103,8 @@ def main():
         records, diagnostics = load_fires(str(ranking_path), ranking_path.stat().st_mtime_ns,
                                            str(official_path), official_path.stat().st_mtime_ns, selected_day)
     except (OSError, csv.Error, ValueError) as error:
+        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
+            st.session_state.pop(key, None)
         st.error(f"Unable to load ranked fires: {error}")
         return
     if diagnostics["unmatched"]:
@@ -97,11 +112,15 @@ def main():
     if diagnostics["invalid_dates"]:
         st.warning(f"Skipped {diagnostics['invalid_dates']} records with missing or invalid assessment dates.")
     if not records:
+        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
+            st.session_state.pop(key, None)
         st.info("No ranked fires available for this assessment day.")
         return
     if st.button("Refresh community data"):
         load_communities.clear()
         st.session_state.pop("community_point_fetch", None)
+        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
+            st.session_state.pop(key, None)
     if "community_point_fetch" not in st.session_state or time.time() - st.session_state.get("community_point_fetch_time", 0) >= 3600:
         try:
             st.session_state.community_point_fetch = load_communities()

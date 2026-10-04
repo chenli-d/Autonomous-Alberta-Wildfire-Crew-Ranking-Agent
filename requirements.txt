@@ -6,3 +6,4 @@ folium>=0.19,<1
 streamlit-folium>=0.24,<1
 requests>=2.32,<3
 shapely>=2.0,<3
+python-dotenv>=1.0,<2
