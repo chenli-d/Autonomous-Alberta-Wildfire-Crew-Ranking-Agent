@@ -27,7 +27,7 @@ Record of the second phase, in the order the work was done: the questions carrie
 
 **Why:**
 - Phase 1's whole-year and single-day results disagree, and the single day was picked without a fixed rule (phase 1, decision 10).
-- "More than `H`" fires: on a day with exactly `H` fires, every fire gets a crew, so both rankings tie and the day carries no information.
+- "More than `H`" fires: on a day with exactly `H` fires, every fire gets a crew, so both rankings tie at the top `H`.
 - `H = 10` matches phase 1. All four values are multiples of 5, so each cut is exactly 20% (phase 1, decision 8).
 - The sensitivity checks show whether the conclusion depends on the assumed crew count, which we have no data for.
 - In the own day sets, `H` and the days change together. The common day set holds the days fixed, so only `H` changes; comparing `H = 10` across the two day sets holds `H` fixed, so only the days change.
@@ -74,7 +74,7 @@ Sensitivity checks and diagnostic, top `H` hits (RF vs baseline):
 | 20 | 26 vs 27 | 26 vs 27 | 26 vs 27 | 26 vs 27 |
 
 **Observations:**
-- On most days both rankings catch the same large fires. In total the baseline catches as many or slightly more, at every `H`, in both windows and in both day sets, except recent window `H = 15` (34 vs 33).
+- On most days both rankings catch the same number of large fires. In total the baseline catches as many or slightly more, at every `H`, in both windows and in both day sets, except the recent window at `H = 15` (34 vs 33 on own days, 26 vs 25 on the common days).
 - The two training windows give similar results; question 2 is still not separated.
 
 **Verification:** on 2024-07-16 at `H = 10`, both runs reproduce phase 1 (full: RF 3 / 3, baseline 7 / 6; recent: RF 5 / 5, baseline 7 / 6); training counts match phase 1 (25,321 / 422 and 2,408 / 97).
@@ -83,7 +83,7 @@ Sensitivity checks and diagnostic, top `H` hits (RF vs baseline):
 
 ## Step 2 — Diagnosing the 2024 differences
 
-**Why:** step 1 showed the baseline level with or ahead of RF at every `H`, in both training windows and both day sets, while RF leads over the whole year (phase 1). Before changing the model, we checked where the two rankings actually differ: whether the gap is spread across many days or comes from a few fires.
+**Why:** step 1 showed the baseline level with or ahead of RF in all but one setting (the recent window at `H = 15`), while RF leads over the whole year (phase 1). Before changing the model, we checked where the two rankings actually differ: whether the gap is spread across many days or comes from a few fires.
 
 **What was done:** for the full window, own day sets, `H = 10`, each of the 52 large fires was classified by which ranking put it in the top `H`.
 
@@ -100,9 +100,9 @@ python research/diagnose_days.py
 
 **Findings:**
 - All six differences are on 2024-07-16. On the other 29 days both rankings catch exactly the same large fires.
-- Three of the five baseline-only fires (`LWF152`, `LWF156`, `LWF159`) belong to the Kettle River Complex, a lightning complex in the Lac La Biche forest area; `LWF157`, also baseline-only, has no complex name. The RF-only fire (`MWF086`) belongs to the Algar Lake Complex.
+- Three of the five baseline-only fires (`LWF152`, `LWF156`, `LWF159`) belong to the Kettle River Complex, a lightning complex in the Lac La Biche forest area (cause from `GENERAL_CAUSE`, checked with a separate one-off query; `diagnose_days.py` does not print it); `LWF157`, also baseline-only, has no complex name. The RF-only fire (`MWF086`) belongs to the Algar Lake Complex.
 - The nine fires missed by both rankings were small at assessment (median 0.2 ha); four belong to the Kettle River Complex, two to the Rabbit Lake Complex, and three have no complex name.
-- Fire type and fuel are not where the rankings differ: 49 of the 52 large fires burned in coniferous fuel, and 21 of the 25 crown fires were caught by both rankings.
+- 49 of the 52 large fires burned in coniferous fuel, and 21 of the 25 crown fires were caught by both rankings.
 
 **Conclusion:** the 2024 day-level gap between RF and baseline comes from one day, largely one lightning complex. 2024 alone cannot separate the two rankings.
 
@@ -123,8 +123,8 @@ python research/diagnose_days.py
 - Step 2 showed one year can be decided by one event. Several validation years, each predicted only from earlier years, average over many fire seasons.
 - 2016 onward: the exploratory analysis behind phase 1, decision 6 used 2006–2015, so the validation years are kept separate from it; every fold has at least 10 training years.
 - 2016–2023 gives 111 large fires on qualifying days, against 70 for 2021–2023 alone, of which 48 are from 2023.
-- Per-complex counting tests whether a result rests on a single complex. `FIRE_NAME` is assigned after the fact, like the final size; it is used only for scoring, never as a feature.
-- Sample sizes were checked before any model was run:
+- Per-complex counting tests whether a result comes from counting several fires of the same complex separately. `FIRE_NAME` is not among the fields recorded at initial assessment (dictionary p.12); it is used only for scoring, never as a feature.
+- Sample sizes were checked before any model was run, with a separate one-off script (`rolling_eval.py` outputs the days and large fires, but not the "with ≥ 1 large fire" column):
 
 | Year | Days with > 10 fires | With ≥ 1 large fire | Large fires on those days |
 | --- | --- | --- | --- |
@@ -139,7 +139,7 @@ python research/diagnose_days.py
 
 **Known limitations:**
 - Per-complex counting was added after the step 2 diagnostic. It is secondary; per fire remains the primary result.
-- Complex names are incomplete: only fires of provincial significance are named (dictionary p.6), so some fires of one event count separately (for example `LWF157`).
+- Complex names are incomplete: only fires of provincial significance are named (dictionary p.6), so some fires of one event may count separately.
 - "Caught if any fire is picked" is a scoring simplification: one crew on one fire of a complex does not handle the whole complex.
 - 2020 has no large fire on qualifying days and contributes nothing to day-level results.
 - Training size grows across folds (10 years for 2016, 17 for 2023).
@@ -179,7 +179,7 @@ Totals (235 days, 111 large fires, 89 large-fire complexes or single fires):
 **Observations:**
 - At top `H`, RF is ahead in 5 years, level in 3 and behind in none. At top `H_cut`, RF is behind once (2021: 9 vs 10).
 - Without 2023, RF still leads at top `H`: 60 vs 52.
-- Per complex, RF still leads, so the result does not rest on one complex.
+- Counting each complex once, RF still leads, so the lead does not come from counting fires of one complex several times. Whether it survives removing any single complex was not tested.
 - 2024 (step 1) is the exception: 38 vs 42. Including 2024, RF leads 140 vs 135 at top `H`.
 
 ---

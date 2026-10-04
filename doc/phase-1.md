@@ -39,9 +39,9 @@ Can a model that uses only information known at initial assessment rank wildfire
 **Why:**
 - 200 ha is the boundary of Alberta's size class E, the largest class in the data dictionary (p.6). The dictionary does not define "large fire" itself.
 - More than 200 ha is the national definition of a large fire in Canada, used by the Canadian Large Fire Database (Stocks et al., 2002).
-- These fires cause almost all of the damage: nationally 3.5% of fires but ~97% of area burned (1959–1997); in this dataset (2006–2025), 1.89% of fires but 99.17% of area burned.
+- These fires account for almost all of the area burned: nationally 3.1% of fires but ~97% of area burned (1959–1997); in this dataset (2006–2025), 1.89% of fires but 99.17% of area burned.
 
-**Known limitation:** final areas can be revised after extinguishment; fires mapped by aerial photography are usually updated the following spring (dictionary p.6). No such revision is visible in this file: for fires over 100 ha, final area equals extinguished area in every year.
+**Known limitation:** final areas can be revised after extinguishment; fires mapped by aerial photography are usually updated the following spring (dictionary p.6). No such revision is visible in this file: for fires over 100 ha that have an extinguished record, final area equals extinguished area in every year.
 
 **Sources:**
 - Alberta Historical Wildfire Data Dictionary 2006–2025, p.6.
@@ -155,7 +155,7 @@ Can a model that uses only information known at initial assessment rank wildfire
 - One allocation day (2024-07-16): the fires first assessed that day are re-ranked; count large fires among the top `H` and top `H_cut` of each ranking.
 
 **Why:**
-- The whole year tests whether the model has learned what makes a fire become large; the allocation day tests an actual crew decision, closer to the challenge's "next-crew list".
+- The whole year tests how well the model ranks the fires that become large; the allocation day simulates a crew decision on one day, closer to the challenge's "next-crew list".
 - K = number of large fires (suggested by the AI coding agent): a perfect ranking places exactly the K large fires in the top K.
 - The allocation day was picked from days with many fires (49 fires, 10 large).
 
@@ -177,7 +177,7 @@ Can a model that uses only information known at initial assessment rank wildfire
 
 **Rule:** `requirements.txt` pins pandas 2.3.2, numpy 2.2.2 and scikit-learn 1.7.2.
 
-**Why:** both teammates get identical results from the same command. Together with the fixed `random_state` (decision 5), every run is reproducible.
+**Why:** both teammates get identical results from the same command. Together with the fixed `random_state` (decision 5), reruns with the same data and package versions give identical results.
 
 **Known limitation:** the Python version is not pinned.
 
