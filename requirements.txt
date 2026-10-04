@@ -1,3 +1,8 @@
 pandas==2.3.2
 numpy==2.2.2
 scikit-learn==1.7.2
+streamlit>=1.40,<2
+folium>=0.19,<1
+streamlit-folium>=0.24,<1
+requests>=2.32,<3
+shapely>=2.0,<3

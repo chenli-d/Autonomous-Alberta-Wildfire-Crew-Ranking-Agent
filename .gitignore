@@ -7,6 +7,7 @@ data/raw/
 # Virtual environment
 .venv/
 venv/
+.venv-map/
 
 # Python cache
 __pycache__/
