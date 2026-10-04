@@ -59,8 +59,7 @@ class RankingTests(unittest.TestCase):
         for ranked, source in [([ranking(), ranking()], [official()]), ([ranking()], [official(), official()])]:
             with self.assertRaises(ValueError):
                 join_rankings(ranked, source)
-        with self.assertRaises(ValueError):
-            join_rankings([], [], date(2024,7,17))
+        self.assertEqual(join_rankings([], [], date(2024,7,17))[0], [])
 
     def test_rank_sort_and_map_adapter(self):
         rows, _ = join_rankings([ranking("2024:B", rank=""), ranking("2024:C", rank="2"), ranking("2024:A", rank="2")],
@@ -90,16 +89,30 @@ class UITests(unittest.TestCase):
         app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "streamlit_app.py"))
         app.session_state["community_point_fetch"] = CommunityFetch(communities=[community()])
         app.session_state["community_point_fetch_time"] = time.time()
-        with patch("app.ranking_service.load_rankings", side_effect=failure, return_value=(rows, {"unmatched":0,"invalid_dates":0})):
-            app.run(timeout=30)
+        from app.review_service import load_allocation_context
+        root = Path(__file__).resolve().parents[1]
+        try:
+            context = load_allocation_context(root / "outputs/dev_recent/allocation_2024-07-16.csv",
+                                              root / "outputs/dev_recent/metrics.json")
+            review_error = None
+        except (OSError, ValueError) as error:
+            context, review_error = None, str(error)
+        snapshot = {"records": rows, "diagnostics": {"unmatched": 0, "invalid_dates": 0},
+                    "context": context, "annual_ranks": {r["fire_id"]: r["rank"] for r in rows or []},
+                    "review_error": review_error,
+                    "settings": {"train_start": 2022, "train_end": 2023, "test_year": 2024,
+                                 "assessment_date": date(2024, 7, 16), "crews": 10}}
+        app.run(timeout=30)
+        with patch("app.assessment_service.run_assessment", side_effect=failure, return_value=snapshot):
+            app.button[0].click().run(timeout=30)
         return app
 
     def test_single_date_table_details_and_selection(self):
         rows, _ = join_rankings([ranking(), ranking("2024:OTHER", rank="22")], [official(), official(number="OTHER")])
         app = self.run_app(rows)
         self.assertEqual(len(app.exception), 0)
-        self.assertEqual(app.selectbox[0].options, ["2024-07-16"])
-        self.assertEqual(app.selectbox[0].value, AVAILABLE_DATES[0])
+        self.assertEqual(app.date_input[0].value, AVAILABLE_DATES[0])
+        self.assertEqual(len(app.number_input), 4)
         self.assertEqual(list(app.dataframe[0].value.columns), ["fire_id", "rank", "rf_probability", "baseline_rank", "nearest_community_distance_km", "community_proximity_rank"])
         self.assertIn("Fire details: 2024:TEST", [h.value for h in app.subheader])
         rendered = repr([df.value.to_dict() for df in app.dataframe])
@@ -111,7 +124,7 @@ class UITests(unittest.TestCase):
                 self.assertNotIn("y", dataframe.value["Field"].tolist())
         self.assertIn("N/A", rendered)
         with patch("app.ranking_service.load_rankings", return_value=(rows, {"unmatched":0,"invalid_dates":0})):
-            app.selectbox[1].select("2024:OTHER").run()
+            app.selectbox[0].select("2024:OTHER").run()
         self.assertEqual(len(app.exception), 0)
         self.assertIn("Fire details: 2024:OTHER", [h.value for h in app.subheader])
 
@@ -129,8 +142,8 @@ class UITests(unittest.TestCase):
         for rows, failure in [([], None), (None, OSError("Ranking file unavailable"))]:
             app = self.run_app(rows, failure)
             self.assertEqual(len(app.exception), 0)
-            self.assertEqual(app.selectbox[0].options, ["2024-07-16"])
-            self.assertEqual(len(app.selectbox), 1)
+            self.assertEqual(app.date_input[0].value, AVAILABLE_DATES[0])
+            self.assertEqual(len(app.selectbox), 0)
 
 
 if __name__ == "__main__":

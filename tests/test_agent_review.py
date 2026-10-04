@@ -91,13 +91,15 @@ class AgentTests(unittest.TestCase):
 
 
 UI_SCRIPT = '''
+import streamlit as st
 from app.agent_view import show_agent_review
 from app.review_service import select_review_candidates
 rows = [{"fire_id":f"2024:F{i}", "allocation_rank":i, "rank":100+i,
          "rf_probability":.5, "status":"kept" if i<=2 else "no_crew",
          "nearest_community_distance_km":float(i)} for i in range(1,6)]
 show_agent_review(rows, select_review_candidates(rows,2,2),
-                  {"H":2, "H_cut":2, "allocation_date":"2024-07-16"})
+                  {"H":2, "H_cut":2, "allocation_date":"2024-07-16"},
+                  run_review=st.button("Run assessment"))
 '''
 
 
@@ -124,7 +126,7 @@ class AgentUITests(unittest.TestCase):
     def test_missing_key_keep_and_rejection(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
             app = AppTest.from_string(UI_SCRIPT).run()
-            self.assertTrue(app.button[0].disabled)
+            self.assertFalse(app.button[0].disabled)
         for raw, valid in [(json.dumps(decision()), True), ("broken", False)]:
             with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), patch("app.agent_view.review_crew_cut", return_value=raw):
                 app = AppTest.from_string(UI_SCRIPT).run()

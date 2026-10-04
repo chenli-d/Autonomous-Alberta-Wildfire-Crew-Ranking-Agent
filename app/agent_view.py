@@ -10,7 +10,7 @@ from app.agent_review import build_agent_input, review_crew_cut, PROMPT_VERSION,
 from app.agent_validation import original_assignments, validate_agent_decision, apply_agent_decision
 
 
-def show_agent_review(records, candidates, context):
+def show_agent_review(records, candidates, context, run_review=False):
     st.subheader("Agent boundary review")
     st.caption("Review only the allocation boundary. RF ranks and saved allocation files are unchanged. A proposed swap requires Apply swap.")
     try:
@@ -37,7 +37,7 @@ def show_agent_review(records, candidates, context):
     configured = bool(os.environ.get("OPENAI_API_KEY", "").strip())
     if not configured:
         st.info("Set OPENAI_API_KEY in the project .env file or server environment, then restart Streamlit. Never paste the key into chat or commit it.")
-    if st.button("Run agent review", disabled=not configured, key="run_agent_review"):
+    if run_review and configured:
         # A new review starts from the unchanged saved RF allocation.
         st.session_state.final_crew_assignments = original.copy()
         trace = {"timestamp": datetime.now(timezone.utc).isoformat(), "fingerprint": fingerprint,

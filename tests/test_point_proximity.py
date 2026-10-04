@@ -68,7 +68,7 @@ class EnrichmentUITests(unittest.TestCase):
         from app.community_service import CommunityFetch
         replacement = CommunityFetch(communities=[community("New point", Point(-111.98066,56.472313))])
         with patch("app.ranking_service.load_rankings", return_value=(rows,{"unmatched":0,"invalid_dates":0})), patch("app.community_service.fetch_communities", return_value=replacement) as fetch:
-            app.button[0].click().run(timeout=30)
+            app.button[1].click().run(timeout=30)
         self.assertEqual(len(app.exception), 0)
         self.assertNotEqual(original, app.dataframe[0].value.iloc[0]["nearest_community_distance_km"])
         self.assertEqual(app.dataframe[0].value.iloc[0]["nearest_community_distance_km"], 0)
@@ -80,7 +80,7 @@ class EnrichmentUITests(unittest.TestCase):
         from app.community_service import CommunityFetch
         with patch("app.ranking_service.load_rankings", return_value=(rows,{"unmatched":0,"invalid_dates":0})), patch("app.community_service.fetch_communities", return_value=CommunityFetch(errors=["Unavailable"])):
             app = self.run_app(rows)
-            app.button[0].click().run(timeout=30)
+            app.button[1].click().run(timeout=30)
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(app.dataframe[0].value.iloc[0]["nearest_community_distance_km"], "N/A")
         self.assertTrue(any("source unavailable" in warning.value for warning in app.warning))

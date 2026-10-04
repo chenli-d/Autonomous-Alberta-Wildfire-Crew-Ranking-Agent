@@ -2,6 +2,8 @@
 import csv
 import json
 import time
+import subprocess
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
@@ -10,9 +12,10 @@ from streamlit_folium import st_folium
 from app.community_service import fetch_communities
 from app.geo import build_result
 from app.map_view import create_map, create_overview_map
-from app.ranking_service import AVAILABLE_DATES, load_rankings, map_record
+from app.ranking_service import map_record
+from app.assessment_service import run_assessment
 from app.proximity_service import enrich_fire_proximity, valid_community_points, find_nearest_community_points
-from app.review_service import load_allocation_context, attach_allocation_context, select_review_candidates
+from app.review_service import attach_allocation_context, select_review_candidates
 from app.agent_view import show_agent_review
 from app.config import load_local_environment
 
@@ -26,30 +29,15 @@ def load_communities():
     return result
 
 
-@st.cache_data(show_spinner=False)
-def load_fires(ranking_path, ranking_modified_ns, official_path, official_modified_ns, selected_day):
-    # Both modification times invalidate the cache; only allowlisted records are cached.
-    return load_rankings(ranking_path, official_path, selected_day)
-
-
-@st.cache_data(show_spinner=False)
-def load_review_context(allocation_path, allocation_modified_ns, metadata_path, metadata_modified_ns, selected_day):
-    return load_allocation_context(allocation_path, metadata_path, selected_day)
-
-
-def show_review_candidates(records, root, selected_day):
+def show_review_candidates(records, assessment, run_review=False):
     st.subheader("Crew-cut review candidates")
-    st.caption("Review shortlist only: RF ranking and crew allocation are unchanged. Cutoff rules use saved daily allocation RF rank; annual RF rank is retained separately.")
-    allocation_path = root / "outputs/dev_recent/allocation_2024-07-16.csv"
-    metadata_path = root / "outputs/dev_recent/metrics.json"
+    st.caption("Review shortlist only: RF ranking and crew allocation are unchanged. Cutoff rules use daily allocation RF rank; annual RF rank is retained separately.")
     try:
-        context = load_review_context(str(allocation_path), allocation_path.stat().st_mtime_ns,
-                                      str(metadata_path), metadata_path.stat().st_mtime_ns, selected_day)
-        context = {**context, "source_versions": [
-            path.stat().st_mtime_ns for path in (allocation_path, metadata_path,
-                root / "outputs/dev_recent/ranking_2024.csv",
-                root / "data/raw/fp-historical-wildfire-data-2006-2025.csv")]}
-        allocated_records = attach_allocation_context(records, context)
+        if assessment["review_error"]:
+            raise ValueError(assessment["review_error"])
+        context = assessment["context"]
+        review_records = [{**row, "rank": assessment["annual_ranks"][row["fire_id"]]} for row in records]
+        allocated_records = attach_allocation_context(review_records, context)
         candidates = select_review_candidates(allocated_records, context["H"], context["H_cut"])
     except (OSError, ValueError, KeyError, TypeError, csv.Error) as error:
         for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
@@ -68,7 +56,7 @@ def show_review_candidates(records, root, selected_day):
                    "Distance (km)": record.get("nearest_community_distance_km") if record.get("nearest_community_distance_km") is not None else "N/A",
                    "Review reasons": ", ".join(record["review_reason"])} for record in candidates], hide_index=True,
                  column_config={"Distance (km)": st.column_config.NumberColumn(format="%.2f")})
-    show_agent_review(allocated_records, candidates, context)
+    show_agent_review(allocated_records, candidates, context, run_review=run_review)
 
 
 def show_fire_details(record):
@@ -93,20 +81,42 @@ def main():
     st.set_page_config(page_title="Alberta wildfire community proximity", layout="wide")
     st.title("Alberta wildfire community proximity")
     st.caption("Deterministic point-to-point distances to Alberta Hamlet/Locality/Townsite points (layer 0). Cities and towns supplied as municipal polygons are not included. Proximity rank does not change RF ranking.")
-    selected_day = st.selectbox("Assessment day", AVAILABLE_DATES,
-                                format_func=lambda day: day.isoformat(), key="supported_assessment_day")
-    st.subheader(f"Fires assessed on {selected_day.isoformat()}")
-    root = Path(__file__).parent
-    ranking_path = root / "outputs/dev_recent/ranking_2024.csv"
-    official_path = root / "data/raw/fp-historical-wildfire-data-2006-2025.csv"
-    try:
-        records, diagnostics = load_fires(str(ranking_path), ranking_path.stat().st_mtime_ns,
-                                           str(official_path), official_path.stat().st_mtime_ns, selected_day)
-    except (OSError, csv.Error, ValueError) as error:
-        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
+    root = Path(__file__).resolve().parent
+    with st.form("assessment_controls"):
+        columns = st.columns(5)
+        train_start = columns[0].number_input("Training start year", 2006, 2023, 2022, step=1)
+        train_end = columns[1].number_input("Training end year", 2006, 2023, 2023, step=1)
+        test_year = columns[2].number_input("Test year", 2007, 2024, 2024, step=1)
+        assessment_date = columns[3].date_input("Assessment date", date(2024, 7, 16),
+                                               min_value=date(2007, 1, 1), max_value=date(2024, 12, 31))
+        crews = columns[4].number_input("Available crews", min_value=1, value=10, step=1)
+        submitted = st.form_submit_button("Run assessment")
+    run_review = False
+    if submitted:
+        for key in ("assessment", "agent_snapshot", "agent_trace", "final_crew_assignments"):
             st.session_state.pop(key, None)
-        st.error(f"Unable to load ranked fires: {error}")
+        try:
+            with st.spinner("Training model and assessing wildfire crews…"):
+                st.session_state.assessment = run_assessment(root, train_start, train_end, test_year, assessment_date, crews)
+            run_review = True
+        except subprocess.CalledProcessError as error:
+            st.error(f"Model assessment failed (exit code {error.returncode}). Check the selected inputs and model diagnostics.")
+            details = (error.stderr or error.stdout or "No process diagnostics were returned.").strip()
+            with st.expander("Model diagnostics"):
+                st.code(details)
+            return
+        except (OSError, csv.Error, ValueError) as error:
+            st.error(f"Unable to complete model assessment: {error}")
+            return
+    assessment = st.session_state.get("assessment")
+    if assessment is None:
+        st.info("Choose model settings and click Run assessment to generate fresh wildfire rankings and review the allocation boundary.")
         return
+    selected_day = assessment["settings"]["assessment_date"]
+    settings = assessment["settings"]
+    st.subheader(f"Fires assessed on {selected_day.isoformat()}")
+    st.caption(f"Completed assessment: trained {settings['train_start']}–{settings['train_end']}; test year {settings['test_year']}; {settings['crews']} available crews. Table ranks are daily allocation ranks.")
+    records, diagnostics = assessment["records"], assessment["diagnostics"]
     if diagnostics["unmatched"]:
         st.warning(f"{diagnostics['unmatched']} ranking fire IDs have no official source match.")
     if diagnostics["invalid_dates"]:
@@ -141,7 +151,7 @@ def main():
     table_fields = ("fire_id", "rank", "rf_probability", "baseline_rank", "nearest_community_distance_km", "community_proximity_rank")
     st.dataframe([{key: r[key] if r[key] is not None else "N/A" for key in table_fields} for r in records], hide_index=True,
                  column_config={"nearest_community_distance_km": st.column_config.NumberColumn(format="%.2f")})
-    show_review_candidates(records, root, selected_day)
+    show_review_candidates(records, assessment, run_review=run_review)
     locations = [mapped for r in records if (mapped := map_record(r)) is not None]
     st.caption(f"{len(records)} ranked fires; {len(locations)} valid locations; {len(records)-len(locations)} missing or invalid locations.")
     if locations:

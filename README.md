@@ -77,24 +77,37 @@ Data notes: [`data/README.md`](data/README.md). **Python 3.10+** (3.11 is best).
 
 ## Community proximity map
 
-This standalone app shows the nearest five Alberta communities to one wildfire.
-It does not run or change the wildfire model, score hazards, or provide response advice.
-The assessment-date selector currently supports **2024-07-16 only**. The main
-ranking source is `outputs/dev_recent/ranking_2024.csv`, loaded without running or
-modifying the model. Its original `rank`, `rf_probability`, and `baseline_rank`
-values are preserved; ranks are not recalculated for the day.
+The Streamlit app runs a configurable RF assessment and displays its fresh daily
+ranking, allocation status, maps, and community proximity. A compact form provides
+training start/end years, test year, assessment date, and available crew count.
+Defaults are training **2022–2023**, test **2024**, date **2024-07-16**, and **10 crews**.
+Training years range from 2006–2023; test years range from 2007–2024. Training must
+end before the test year and the assessment date must be within that year. Reserved
+final-evaluation year 2025 is excluded.
+
+Click **Run assessment** to invoke `model/train_rf.py` with `sys.executable` and
+absolute paths resolved from the app file, using the repository as working directory.
+A spinner covers model execution. Results use stable run name `outputs/ui_demo`;
+the UI immediately loads `allocation_<assessment-date>.csv` without a data cache.
+Daily RF rank, probability, baseline rank, and status are displayed unchanged.
+Process failures show an error and expandable diagnostics. Missing or malformed
+output cannot fall back to an earlier CSV: this run's allocation, metrics, and annual
+ranking files are removed before execution.
+
+Initial rendering waits for an assessment. Completed sanitized results and submitted
+settings remain in browser session state, so wildfire selection, maps, and downloads
+do not retrain the model. Another assessment refreshes results even for the same day.
+RF model and scoring logic are unchanged.
 
 Ranking rows are joined to the existing official local file
 `data/raw/fp-historical-wildfire-data-2006-2025.csv` using
 `fire_id == str(YEAR) + ":" + FIRE_NUMBER.strip()`. Coordinates come exclusively
 from that official file. A ranking `assessment_date` column is used when present;
-otherwise the date is derived from official `ASSESSMENT_DATETIME`. Only July 16
-records are shown. No fire-start-date fallback is used. The bundled subset is no
-longer used for this UI. Both input files are required locally and remain excluded
-from Git; the app performs no wildfire-data download. Their modification times
-invalidate the data cache.
+otherwise the date is derived from official `ASSESSMENT_DATETIME`. Only records for the completed assessment date are shown. No fire-start-date fallback is used. The bundled subset is no
+longer used for this UI. The official data file is required locally and remains excluded from Git; the app
+performs no wildfire-data download. Model outputs are loaded fresh after execution.
 
-The daily ranking table shows 49 matching fires with the current inputs. Select a
+The default daily assessment contains 49 fires with the current local inputs. Select a
 fire from the dropdown to view a grouped detail card and its community-proximity
 map/table/JSON. The overview shows all valid locations without community lines.
 Missing fields display `N/A`; missing/invalid coordinates keep the fire in the
@@ -104,11 +117,10 @@ invalid assessment dates are reported; ambiguous duplicate IDs produce an error.
 ### Crew-cut review candidates
 
 This section is a deterministic shortlist for later review, not a new ranking or
-allocation. Saved context comes from `outputs/dev_recent/allocation_2024-07-16.csv`
-(only fire ID, daily rank, and status) and `outputs/dev_recent/metrics.json`
-(only allocation date, `H`, and `H_cut`). The current run has `H=10`, `H_cut=8`.
-The ranking table preserves annual RF ranks; the shortlist also shows the saved
-daily allocation RF ranks used for crew cutoffs. Neither is recalculated.
+allocation. Context comes from the completed run's `outputs/ui_demo/allocation_<date>.csv`
+(only fire ID, daily rank, and status) and `metrics.json` (only allocation date,
+`H`, and `H_cut`). Annual RF ranks for the existing agent review are joined from
+that run's `ranking_<test-year>.csv`; the main table displays daily RF ranks.
 
 Select daily rank `H_cut` as `last_kept`, ranks `H_cut+1` and `H_cut+2` as
 `cutoff_boundary`, and the two closest fires whose saved status is `displaced`
@@ -121,7 +133,8 @@ a shorter shortlist. Missing community data leaves boundary candidates available
 Allocation context must match the displayed fire IDs completely, with unique
 consecutive daily ranks, consistent saved statuses, and valid crew counts/date.
 Missing or inconsistent context hides the shortlist with a warning while retaining
-the fire UI. Both context files' modification times invalidate its cache.
+the fire UI. Source modification times are included in the review fingerprint; loaded context
+is retained with the completed assessment.
 Community refresh recomputes candidate selection. `app/review_service.py` handles
 loading/selection without mutating source records. No LLM, rescoring, crew swaps,
 or allocation changes are performed; outcome fields are excluded.
@@ -142,7 +155,7 @@ python -m venv $mapEnv
 & "$mapEnv\Scripts\python.exe" -m streamlit run streamlit_app.py
 ```
 
-Open the local URL printed by Streamlit. Select a day and wildfire, inspect
+Open the local URL printed by Streamlit. Choose settings, click Run assessment, select a wildfire, inspect
 the map and table, and download the result JSON. `Refresh community data` retries
 failed requests and clears the one-hour successful-data cache. Internet access is
 required for the Alberta API and OpenStreetMap tiles. Partial lookups are explicitly
@@ -190,13 +203,13 @@ Run the offline test suite:
 & "$mapEnv\Scripts\python.exe" -m unittest discover -s tests -v
 ```
 
-For a live smoke check, launch the app with the default sample, confirm five rows
-and corresponding proximity map features, plus 49 fire records and overview markers.
-Confirm the assessment-date selector has only July 16, change the wildfire selector,
-inspect its detail card, and test `Refresh community data`. Offline tests cover the
-ID join, date filter, field allowlist, missing values/coordinates, selection, geometry,
-pagination, empty layers, and partial/network failures. A local-input test checks the
-49 real records and unchanged ranks. Point-enrichment tests cover known distances,
+For a live smoke check, run the default assessment, confirm 49 daily fire records
+and overview markers, change the wildfire selector, and test Refresh community data.
+Rerun the same date with a different crew count and confirm fresh allocation statuses.
+Offline tests cover subprocess arguments/failures, fresh result loading, controls,
+session persistence, combined review triggering, ID/date joins, field allowlisting,
+missing coordinates, geometry, pagination, and partial/network failures.
+Point-enrichment tests cover known distances,
 invalid coordinates, deterministic ties, separate proximity ranks, and refresh.
 
 ### Bounded AI boundary review
@@ -219,10 +232,11 @@ Remove-Variable reviewSecret
 & "$mapEnv\Scripts\python.exe" -m streamlit run streamlit_app.py
 ```
 
-`Run agent review` sends one request, with a 10-second connection timeout and
-60-second read timeout, no tools and no automatic retries. Missing credentials
-disable the button. API failure, refusal, incomplete output, or invalid JSON
-preserves the original allocation. The agent receives only the last-kept fire and
+**Run assessment** also triggers the existing boundary review once after successful
+model execution and proximity enrichment. There is no separate Run agent review
+button. Review sends one request, with a 10-second connection timeout and
+60-second read timeout, no tools and no automatic retries. Missing credentials skip review with an explanatory message while retaining fresh RF results. API failure, refusal, incomplete output, or invalid JSON
+preserves the original allocation. No eligible boundary candidates also skip review. The agent receives only the last-kept fire and
 shortlisted no-crew challengers: IDs, annual/daily RF ranks, probability, baseline
 rank, initial assessment/weather/fire-characteristic fields, nearest community,
 distance, proximity rank, review reasons and saved status. Coordinates and arbitrary
@@ -240,8 +254,9 @@ A valid swap is a proposal until you click **Apply swap**. Application revalidat
 the proposal and changes a separate session-only crew-assignment map. The UI shows
 before/after assignments and final allocation alongside unchanged saved statuses.
 Saved CSVs and RF ranks are never rewritten. Apply is disabled after application.
-A new review starts from saved allocation; community Refresh, source-file changes,
-or model/input changes invalidate the review and restore original session allocation.
+A new assessment starts review from its fresh RF allocation; community Refresh or
+a changed review fingerprint invalidates the proposal and restores original session
+allocation. Editing unsubmitted form controls does not change completed results.
 
 `Download agent review trace` preserves sanitized input, policy/version, model,
 raw structured response, validation result and final assignments/action. No API

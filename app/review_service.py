@@ -21,8 +21,8 @@ def load_allocation_context(allocation_path, metadata_path, selected_day=AVAILAB
         metadata = json.load(file)
     context = {key: metadata[key] for key in ("allocation_date", "H", "H_cut")}
     _validate_counts(context["H"], context["H_cut"])
-    if selected_day not in AVAILABLE_DATES or context["allocation_date"] != selected_day.isoformat():
-        raise ValueError("Allocation date does not match the supported assessment day.")
+    if context["allocation_date"] != selected_day.isoformat():
+        raise ValueError("Allocation date does not match the selected assessment day.")
     allocations, ranks = {}, set()
     with Path(allocation_path).open(newline="", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)

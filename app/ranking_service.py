@@ -38,8 +38,6 @@ def _day(value):
 
 
 def join_rankings(ranking_rows, official_rows, selected_day=AVAILABLE_DATES[0]):
-    if selected_day not in AVAILABLE_DATES:
-        raise ValueError("Only assessment date 2024-07-16 is currently supported.")
     # Drop unknown/outcome columns immediately; never return/cache raw CSV dictionaries.
     rankings = [{key: row.get(key) for key in SAFE_FIELDS if key in row} for row in ranking_rows]
     wanted, seen = set(), set()
