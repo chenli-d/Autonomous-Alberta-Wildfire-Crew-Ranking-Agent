@@ -79,23 +79,34 @@ Data notes: [`data/README.md`](data/README.md). **Python 3.10+** (3.11 is best).
 
 This standalone app shows the nearest five Alberta communities to one wildfire.
 It does not run or change the wildfire model, score hazards, or provide response advice.
-Select a calendar day from `ASSESSMENT_DATETIME` (assessment date), not the fire start
-date or all fires active that day. The default day
-is July 16, 2024 (or the latest available date if absent). The overview shows all valid
-daily wildfire locations without community lines. Select one wildfire from the
-dropdown to see its separate community-proximity map, table, and downloadable JSON.
-The first fire ID in sorted order is selected by default.
-The bundled subset omits assessment timestamps, so the app joins them from the existing
-local `data/raw/fp-historical-wildfire-data-2006-2025.csv` using `YEAR` and `FIRE_NUMBER`.
-Only the original subset's fires are shown; its coordinates and optional scores are
-preserved. Missing/unmatched assessment dates are skipped, without falling back to
-fire start dates. Both files' modification times invalidate the data cache.
-The raw CSV is required locally and remains excluded from Git; no download is performed.
-Missing/invalid coordinates are skipped with a count; invalid dates are reported.
-Marker popups show fire ID and a hazard score when available in the wildfire CSV:
-finite `hazard_score` takes precedence over finite `rf_probability`. The current
-CSV has neither column. Scores are passed through unchanged; model outputs are
-not loaded and no model is run.
+The assessment-date selector currently supports **2024-07-16 only**. The main
+ranking source is `outputs/dev_recent/ranking_2024.csv`, loaded without running or
+modifying the model. Its original `rank`, `rf_probability`, and `baseline_rank`
+values are preserved; ranks are not recalculated for the day.
+
+Ranking rows are joined to the existing official local file
+`data/raw/fp-historical-wildfire-data-2006-2025.csv` using
+`fire_id == str(YEAR) + ":" + FIRE_NUMBER.strip()`. Coordinates come exclusively
+from that official file. A ranking `assessment_date` column is used when present;
+otherwise the date is derived from official `ASSESSMENT_DATETIME`. Only July 16
+records are shown. No fire-start-date fallback is used. The bundled subset is no
+longer used for this UI. Both input files are required locally and remain excluded
+from Git; the app performs no wildfire-data download. Their modification times
+invalidate the data cache.
+
+The daily ranking table shows 49 matching fires with the current inputs. Select a
+fire from the dropdown to view a grouped detail card and its community-proximity
+map/table/JSON. The overview shows all valid locations without community lines.
+Missing fields display `N/A`; missing/invalid coordinates keep the fire in the
+ranking table and card but disable its maps/proximity lookup. Unmatched IDs and
+invalid assessment dates are reported; ambiguous duplicate IDs produce an error.
+
+Frontend records use an explicit allowlist of ranking, initial-assessment, weather,
+fire-characteristic, date, and coordinate fields. `status` is included only when
+present in the ranking source. `y`, `CURRENT_SIZE`, and unlisted future-outcome
+fields are removed before caching or displaying records. The app shows inputs and
+ranking values without causal explanations. Map marker scores use the existing
+`rf_probability` value unchanged.
 
 From this folder, using a working Python 3.10+ installation:
 
@@ -141,8 +152,9 @@ Run the offline test suite:
 ```
 
 For a live smoke check, launch the app with the default sample, confirm five rows
-and corresponding proximity map features, plus 18 valid fire markers in the overview.
-Change the wildfire and day selectors and test `Refresh community data`.
-Offline tests mock API responses and cover daily filtering, invalid coordinates,
-optional scores, selector resets, empty days, and
-geometry, pagination, invalid records, empty layers, and partial/network failures.
+and corresponding proximity map features, plus 49 fire records and overview markers.
+Confirm the assessment-date selector has only July 16, change the wildfire selector,
+inspect its detail card, and test `Refresh community data`. Offline tests cover the
+ID join, date filter, field allowlist, missing values/coordinates, selection, geometry,
+pagination, empty layers, and partial/network failures. A local-input test checks the
+49 real records and unchanged ranks.

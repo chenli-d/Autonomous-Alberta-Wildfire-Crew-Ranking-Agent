@@ -1,127 +1,136 @@
 import time
-import csv
-import tempfile
 import unittest
-from pathlib import Path
 from datetime import date
+from pathlib import Path
 from unittest.mock import patch
-import streamlit as st
 
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from app.community_service import CommunityFetch
+from app.ranking_service import AVAILABLE_DATES, SAFE_FIELDS, join_rankings, load_rankings, map_record
 from test_proximity import community
-from streamlit_app import parse_wildfires, load_wildfires
-from app.map_view import create_overview_map, create_map
 
 
-def row(timestamp="2024-07-16 18:00", **values):
-    return {"YEAR": "2024", "FIRE_NUMBER": "PWF076", "ASSESSMENT_DATETIME": timestamp,
-            "FIRE_START_DATE": "2024-07-15 12:00",
-            "LATITUDE": "56.707233", "LONGITUDE": "-118.9744", **values}
+def ranking(identifier="2024:TEST", **values):
+    return {"fire_id": identifier, "rank": "21", "rf_probability": ".532", "baseline_rank": "42",
+            "y": "FUTURE_OUTCOME_SECRET", "CURRENT_SIZE": "FINAL_SIZE_SECRET",
+            "future_outcome": "OTHER_OUTCOME_SECRET", **values}
 
 
-class DailyDataTests(unittest.TestCase):
-    def test_assessment_join_retains_cohort_and_coordinates(self):
-        with tempfile.TemporaryDirectory() as folder:
-            seed, source = Path(folder)/"seed.csv", Path(folder)/"source.csv"
-            seed_rows = [row(hazard_score=".2"), row(FIRE_NUMBER="missing")]
-            for record in seed_rows:
-                record.pop("ASSESSMENT_DATETIME")
-            source_rows = [row("2024-07-17 12:00", LATITUDE="0"), row(FIRE_NUMBER="unrelated")]
-            for path, records in [(seed, seed_rows), (source, source_rows)]:
-                with path.open("w", newline="") as file:
-                    writer = csv.DictWriter(file, fieldnames=records[0].keys())
-                    writer.writeheader()
-                    writer.writerows(records)
-            days, invalid = load_wildfires(str(seed), seed.stat().st_mtime_ns,
-                                            str(source), source.stat().st_mtime_ns)
-        self.assertEqual(list(days), [date(2024,7,17)])
-        fire = days[date(2024,7,17)]["fires"][0]
-        self.assertEqual(fire["latitude"], 56.707233)
-        self.assertEqual(fire["hazard_score"], .2)
-        self.assertEqual(invalid, 1)  # Unmatched IDs never fall back to start dates.
+def official(year="2024", number="TEST", timestamp="2024-07-16 6:00", **values):
+    return {"YEAR": year, "FIRE_NUMBER": number, "ASSESSMENT_DATETIME": timestamp,
+            "LATITUDE": "56.472313", "LONGITUDE": "-111.98066", **values}
 
-    def test_dates_filtering_and_coordinates(self):
-        records = [row(), row("2024-07-16 6:00", FIRE_NUMBER="A"), row("2024-07-17 00:00"), row("bad")]
-        for value in ("", "bad", "nan", "inf", "91"):
-            records.append(row(LATITUDE=value))
-        records.append(row(LONGITUDE="181"))
-        records.append(row("2024-07-18", LATITUDE=None))
-        days, invalid = parse_wildfires(records)
-        self.assertEqual(list(days), [date(2024,7,16), date(2024,7,17), date(2024,7,18)])
-        self.assertEqual(len(days[date(2024,7,16)]["fires"]), 2)
-        self.assertEqual(days[date(2024,7,16)]["skipped"], 6)
-        self.assertEqual(days[date(2024,7,18)]["fires"], [])
-        self.assertEqual(invalid, 1)
 
-    def test_optional_scores(self):
-        for values, expected in [({},None), ({"hazard_score":"0"},0),
-                                 ({"hazard_score":".2","rf_probability":".3"},.2),
-                                 ({"hazard_score":"nan","rf_probability":".3"},.3),
-                                 ({"rf_probability":"inf"},None)]:
-            days, _ = parse_wildfires([row(**values)])
-            self.assertEqual(days[date(2024,7,16)]["fires"][0]["hazard_score"], expected)
+class RankingTests(unittest.TestCase):
+    def test_join_date_coordinates_and_allowlist(self):
+        rows, diagnostics = join_rankings([ranking(), ranking("2023:TEST")],
+                                          [official(number=" TEST "), official("2023", timestamp="2023-07-16 12:00")])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(diagnostics, {"unmatched": 0, "invalid_dates": 0})
+        record = rows[0]
+        self.assertEqual(record["LATITUDE"], 56.472313)
+        self.assertEqual(record["LONGITUDE"], -111.98066)
+        self.assertEqual(record["assessment_date"], "2024-07-16")
+        self.assertEqual(record["rank"], 21)
+        self.assertLessEqual(set(record), set(SAFE_FIELDS))
+        for key in ("y", "CURRENT_SIZE", "future_outcome"):
+            self.assertNotIn(key, record)
+        self.assertNotIn("SECRET", repr(rows))
 
-    def test_overview_markers_without_lines(self):
-        days, _ = parse_wildfires([row(hazard_score="0"), row(FIRE_NUMBER="A")])
-        fires = days[date(2024,7,16)]["fires"]
-        view = create_overview_map(fires)
-        self.assertEqual(sum(child.__class__.__name__ == "Marker" for child in view._children.values()), 2)
-        html = view.get_root().render()
-        self.assertNotIn("poly_line", html)
-        self.assertNotIn("geo_json", html)
-        self.assertIn("2024:PWF076", html)
-        self.assertIn("Hazard score: 0.0", html)
-        self.assertIn("Hazard score: 0.0", create_map("fire", 0, 0, [], 0.0).get_root().render())
+    def test_direct_dates_missing_fields_and_coordinates(self):
+        rows, diagnostics = join_rankings([
+            ranking(assessment_date="2024-07-16", rank="", rf_probability="nan", status="kept"),
+            ranking("2024:OTHER", assessment_date="2024-07-17"),
+            ranking("2024:BAD", assessment_date="bad"),
+            ranking("2024:UNMATCHED", assessment_date="2024-07-16")],
+            [official(timestamp="2024-07-17", LATITUDE="91", LONGITUDE=""), official(number="BAD")])
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(map_record(row) is None for row in rows))
+        test = next(r for r in rows if r["fire_id"] == "2024:TEST")
+        self.assertIsNone(test["rf_probability"])
+        self.assertEqual(test["status"], "kept")
+        self.assertEqual(test["assessment_date"], "2024-07-16")
+        self.assertEqual(diagnostics["unmatched"], 2)
+        self.assertEqual(diagnostics["invalid_dates"], 1)
+
+    def test_duplicates_and_unsupported_date(self):
+        for ranked, source in [([ranking(), ranking()], [official()]), ([ranking()], [official(), official()])]:
+            with self.assertRaises(ValueError):
+                join_rankings(ranked, source)
+        with self.assertRaises(ValueError):
+            join_rankings([], [], date(2024,7,17))
+
+    def test_rank_sort_and_map_adapter(self):
+        rows, _ = join_rankings([ranking("2024:B", rank=""), ranking("2024:C", rank="2"), ranking("2024:A", rank="2")],
+                                [official(number=n) for n in "ABC"])
+        self.assertEqual([r["fire_id"] for r in rows], ["2024:A", "2024:C", "2024:B"])
+        self.assertEqual(set(map_record(rows[0])), {"fire_id", "latitude", "longitude", "hazard_score"})
+        self.assertEqual(map_record(rows[0])["hazard_score"], .532)
+
+    def test_actual_files(self):
+        root = Path(__file__).resolve().parents[1]
+        rows, diagnostics = load_rankings(root / "outputs/dev_recent/ranking_2024.csv",
+                                          root / "data/raw/fp-historical-wildfire-data-2006-2025.csv")
+        self.assertEqual(len(rows), 49)
+        self.assertEqual(rows[0]["fire_id"], "2024:MWF086")
+        self.assertEqual(rows[0]["rank"], 21)
+        self.assertEqual(rows[0]["LATITUDE"], 56.472313)
+        self.assertEqual(rows[0]["LONGITUDE"], -111.98066)
+        self.assertEqual(diagnostics["unmatched"], 0)
+        self.assertTrue(all(r["assessment_date"] == "2024-07-16" for r in rows))
+        self.assertTrue(all(set(r).issubset(SAFE_FIELDS) for r in rows))
+        self.assertTrue(all(map_record(r) is not None for r in rows))
 
 
 class UITests(unittest.TestCase):
-    def app(self, fetched):
+    def run_app(self, rows=None, failure=None):
+        st.cache_data.clear()
         app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "streamlit_app.py"))
-        app.session_state["community_fetch"] = fetched
+        app.session_state["community_fetch"] = CommunityFetch(communities=[community()])
         app.session_state["community_fetch_time"] = time.time()
-        return app.run(timeout=30)
+        with patch("app.ranking_service.load_rankings", side_effect=failure, return_value=(rows, {"unmatched":0,"invalid_dates":0})):
+            app.run(timeout=30)
+        return app
 
-    def test_sample_and_table(self):
-        app = self.app(CommunityFetch(communities=[community()]))
+    def test_single_date_table_details_and_selection(self):
+        rows, _ = join_rankings([ranking(), ranking("2024:OTHER", rank="22")], [official(), official(number="OTHER")])
+        app = self.run_app(rows)
         self.assertEqual(len(app.exception), 0)
-        self.assertEqual(app.selectbox[0].value, date(2024,7,16))
-        self.assertEqual(app.selectbox[0].label, "Assessment day")
-        self.assertEqual(app.selectbox[1].value, app.selectbox[1].options[0])
-        self.assertNotIn("2024:PWF076", app.selectbox[1].options)
-        self.assertEqual(len(app.selectbox[1].options), 18)
-        self.assertIn("0 records skipped", app.caption[1].value)
-        self.assertEqual(len(app.dataframe), 1)
-        self.assertEqual(app.dataframe[0].value.iloc[0]["Community"], "Example")
-        original_distance = app.dataframe[0].value.iloc[0]["Distance (km)"]
-        app.selectbox[1].select("2024:MWF086").run()
+        self.assertEqual(app.selectbox[0].options, ["2024-07-16"])
+        self.assertEqual(app.selectbox[0].value, AVAILABLE_DATES[0])
+        self.assertEqual(list(app.dataframe[0].value.columns), ["fire_id", "rank", "rf_probability", "baseline_rank"])
+        self.assertIn("Fire details: 2024:TEST", [h.value for h in app.subheader])
+        rendered = repr([df.value.to_dict() for df in app.dataframe])
+        for forbidden in ("SECRET", "CURRENT_SIZE", "future_outcome"):
+            self.assertNotIn(forbidden, rendered)
+        for dataframe in app.dataframe:
+            self.assertNotIn("y", dataframe.value.columns)
+            if "Field" in dataframe.value:
+                self.assertNotIn("y", dataframe.value["Field"].tolist())
+        self.assertIn("N/A", rendered)
+        with patch("app.ranking_service.load_rankings", return_value=(rows, {"unmatched":0,"invalid_dates":0})):
+            app.selectbox[1].select("2024:OTHER").run()
         self.assertEqual(len(app.exception), 0)
-        self.assertIn("2024:MWF086", app.subheader[1].value)
-        self.assertNotEqual(app.dataframe[0].value.iloc[0]["Distance (km)"], original_distance)
-        other_day = app.selectbox[0].options[-1]
-        app.selectbox[0].select(date.fromisoformat(other_day)).run()
-        self.assertEqual(len(app.exception), 0)
-        self.assertEqual(app.selectbox[1].value, app.selectbox[1].options[0])
+        self.assertIn("Fire details: 2024:OTHER", [h.value for h in app.subheader])
 
-    def test_failure_keeps_fire_map(self):
-        app = self.app(CommunityFetch(errors=["City: unavailable"]))
+    def test_missing_coordinates_still_shows_details(self):
+        rows, _ = join_rankings([ranking()], [official(LATITUDE="nan")])
+        with patch("app.map_view.create_overview_map") as overview, patch("app.community_service.fetch_communities") as fetch:
+            app = self.run_app(rows)
         self.assertEqual(len(app.exception), 0)
-        self.assertGreater(len(app.warning), 0)
-        self.assertGreater(len(app.info), 0)
-
-    def test_day_without_coordinates_skips_maps_and_api(self):
-        st.cache_data.clear()
-        with patch("csv.DictReader", return_value=[row(LATITUDE="nan")]), patch("app.community_service.fetch_communities") as fetch, patch("app.map_view.create_overview_map") as overview, patch("app.map_view.create_map") as detail:
-            app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "streamlit_app.py")).run(timeout=30)
-        st.cache_data.clear()
-        self.assertEqual(len(app.exception), 0)
-        self.assertEqual(len(app.selectbox), 1)
-        self.assertEqual(len(app.subheader), 0)
-        self.assertIn("No valid wildfire locations", app.info[0].value)
-        fetch.assert_not_called()
+        self.assertIn("Fire details: 2024:TEST", [h.value for h in app.subheader])
+        self.assertTrue(any("proximity is unavailable" in info.value for info in app.info))
         overview.assert_not_called()
-        detail.assert_not_called()
+        fetch.assert_not_called()
+
+    def test_selector_survives_empty_or_error(self):
+        for rows, failure in [([], None), (None, OSError("Ranking file unavailable"))]:
+            app = self.run_app(rows, failure)
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(app.selectbox[0].options, ["2024-07-16"])
+            self.assertEqual(len(app.selectbox), 1)
 
 
 if __name__ == "__main__":
