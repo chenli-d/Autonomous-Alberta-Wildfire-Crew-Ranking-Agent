@@ -2,7 +2,7 @@
 
 Record of the second phase, in the order the work was done: the questions carried over from [phase 1](phase-1.md), each step's decisions and reasons, the runs and their results, and the work still open.
 
-- **Code:** not yet committed (`model/evaluate_days.py`, `research/diagnose_days.py`, `model/rolling_eval.py`)
+- **Code:** commit `3c4ec8a` (`model/evaluate_days.py`, `research/diagnose_days.py`, `model/rolling_eval.py`)
 - **Status:** in progress.
 
 ## Questions
