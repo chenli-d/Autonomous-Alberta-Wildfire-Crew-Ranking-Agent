@@ -8,6 +8,11 @@ Data source: Open Alberta, "Historical wildfire data: 2006 to 2025"
 
 Uses only pandas and numpy. Each section prints the numbers and what they mean.
 Only data up to LAST_YEAR is read; 2025 is reserved for the final evaluation.
+
+Written to try out ideas before phase 1. Phase 1 (doc/phase-1.md) uses Q1, Q3 and Q4.
+Q7 follows the challenge setup (40 crews per year), not the phase 1 evaluation.
+DEV_YEARS is the exploration period; phase 2 validation starts in 2016 to stay separate.
+Notes on formula weights and the historical_rate whitelist are from an earlier framing, unused.
 """
 import sys
 from pathlib import Path
