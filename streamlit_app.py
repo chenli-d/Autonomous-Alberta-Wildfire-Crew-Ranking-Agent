@@ -12,6 +12,7 @@ from app.geo import build_result
 from app.map_view import create_map, create_overview_map
 from app.ranking_service import AVAILABLE_DATES, load_rankings, map_record
 from app.proximity_service import enrich_fire_proximity, valid_community_points, find_nearest_community_points
+from app.review_service import load_allocation_context, attach_allocation_context, select_review_candidates
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading Alberta communities…")
@@ -27,6 +28,35 @@ def load_communities():
 def load_fires(ranking_path, ranking_modified_ns, official_path, official_modified_ns, selected_day):
     # Both modification times invalidate the cache; only allowlisted records are cached.
     return load_rankings(ranking_path, official_path, selected_day)
+
+
+@st.cache_data(show_spinner=False)
+def load_review_context(allocation_path, allocation_modified_ns, metadata_path, metadata_modified_ns, selected_day):
+    return load_allocation_context(allocation_path, metadata_path, selected_day)
+
+
+def show_review_candidates(records, root, selected_day):
+    st.subheader("Crew-cut review candidates")
+    st.caption("Review shortlist only: RF ranking and crew allocation are unchanged. Cutoff rules use saved daily allocation RF rank; annual RF rank is retained separately.")
+    allocation_path = root / "outputs/dev_recent/allocation_2024-07-16.csv"
+    metadata_path = root / "outputs/dev_recent/metrics.json"
+    try:
+        context = load_review_context(str(allocation_path), allocation_path.stat().st_mtime_ns,
+                                      str(metadata_path), metadata_path.stat().st_mtime_ns, selected_day)
+        candidates = select_review_candidates(attach_allocation_context(records, context), context["H"], context["H_cut"])
+    except (OSError, ValueError, KeyError, TypeError, csv.Error) as error:
+        st.warning(f"Review shortlist unavailable: {error}")
+        return
+    st.caption(f"H = {context['H']}; H_cut = {context['H_cut']}; {len(candidates)} review candidates.")
+    if not candidates:
+        st.info("No review candidates available.")
+        return
+    st.dataframe([{"fire_id": record["fire_id"], "Daily allocation RF rank": record["allocation_rank"],
+                   "Annual RF rank": record.get("rank"), "rf_probability": record.get("rf_probability"),
+                   "Current allocation status": record["status"], "Nearest community": record.get("nearest_community") or "N/A",
+                   "Distance (km)": record.get("nearest_community_distance_km") if record.get("nearest_community_distance_km") is not None else "N/A",
+                   "Review reasons": ", ".join(record["review_reason"])} for record in candidates], hide_index=True,
+                 column_config={"Distance (km)": st.column_config.NumberColumn(format="%.2f")})
 
 
 def show_fire_details(record):
@@ -92,6 +122,7 @@ def main():
     table_fields = ("fire_id", "rank", "rf_probability", "baseline_rank", "nearest_community_distance_km", "community_proximity_rank")
     st.dataframe([{key: r[key] if r[key] is not None else "N/A" for key in table_fields} for r in records], hide_index=True,
                  column_config={"nearest_community_distance_km": st.column_config.NumberColumn(format="%.2f")})
+    show_review_candidates(records, root, selected_day)
     locations = [mapped for r in records if (mapped := map_record(r)) is not None]
     st.caption(f"{len(records)} ranked fires; {len(locations)} valid locations; {len(records)-len(locations)} missing or invalid locations.")
     if locations:

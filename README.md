@@ -101,6 +101,31 @@ Missing fields display `N/A`; missing/invalid coordinates keep the fire in the
 ranking table and card but disable its maps/proximity lookup. Unmatched IDs and
 invalid assessment dates are reported; ambiguous duplicate IDs produce an error.
 
+### Crew-cut review candidates
+
+This section is a deterministic shortlist for later review, not a new ranking or
+allocation. Saved context comes from `outputs/dev_recent/allocation_2024-07-16.csv`
+(only fire ID, daily rank, and status) and `outputs/dev_recent/metrics.json`
+(only allocation date, `H`, and `H_cut`). The current run has `H=10`, `H_cut=8`.
+The ranking table preserves annual RF ranks; the shortlist also shows the saved
+daily allocation RF ranks used for crew cutoffs. Neither is recalculated.
+
+Select daily rank `H_cut` as `last_kept`, ranks `H_cut+1` and `H_cut+2` as
+`cutoff_boundary`, and the two closest fires whose saved status is `displaced`
+or `no_crew` as `proximity_exception`. Only finite, nonnegative distances qualify
+for proximity selection; ties sort by fire ID. Deduplicate IDs and keep every
+applicable reason. Display last kept first, then boundary fires by daily rank,
+then remaining proximity exceptions by distance. Fewer eligible fires produce
+a shorter shortlist. Missing community data leaves boundary candidates available.
+
+Allocation context must match the displayed fire IDs completely, with unique
+consecutive daily ranks, consistent saved statuses, and valid crew counts/date.
+Missing or inconsistent context hides the shortlist with a warning while retaining
+the fire UI. Both context files' modification times invalidate its cache.
+Community refresh recomputes candidate selection. `app/review_service.py` handles
+loading/selection without mutating source records. No LLM, rescoring, crew swaps,
+or allocation changes are performed; outcome fields are excluded.
+
 Frontend records use an explicit allowlist of ranking, initial-assessment, weather,
 fire-characteristic, date, and coordinate fields. `status` is included only when
 present in the ranking source. `y`, `CURRENT_SIZE`, and unlisted future-outcome
