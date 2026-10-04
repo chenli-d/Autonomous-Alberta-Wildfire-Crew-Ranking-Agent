@@ -88,8 +88,8 @@ class UITests(unittest.TestCase):
     def run_app(self, rows=None, failure=None):
         st.cache_data.clear()
         app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "streamlit_app.py"))
-        app.session_state["community_fetch"] = CommunityFetch(communities=[community()])
-        app.session_state["community_fetch_time"] = time.time()
+        app.session_state["community_point_fetch"] = CommunityFetch(communities=[community()])
+        app.session_state["community_point_fetch_time"] = time.time()
         with patch("app.ranking_service.load_rankings", side_effect=failure, return_value=(rows, {"unmatched":0,"invalid_dates":0})):
             app.run(timeout=30)
         return app
@@ -100,7 +100,7 @@ class UITests(unittest.TestCase):
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(app.selectbox[0].options, ["2024-07-16"])
         self.assertEqual(app.selectbox[0].value, AVAILABLE_DATES[0])
-        self.assertEqual(list(app.dataframe[0].value.columns), ["fire_id", "rank", "rf_probability", "baseline_rank"])
+        self.assertEqual(list(app.dataframe[0].value.columns), ["fire_id", "rank", "rf_probability", "baseline_rank", "nearest_community_distance_km", "community_proximity_rank"])
         self.assertIn("Fire details: 2024:TEST", [h.value for h in app.subheader])
         rendered = repr([df.value.to_dict() for df in app.dataframe])
         for forbidden in ("SECRET", "CURRENT_SIZE", "future_outcome"):

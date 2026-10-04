@@ -128,22 +128,36 @@ to an unavailable Python installation, use the fresh environment above.
 
 Community geometries come exclusively from the [Alberta Government municipal
 communities service](https://geospatial.alberta.ca/titan/rest/services/boundaries/municipal_communities_public/MapServer).
-Layers 0–6 are queried through `/{layer}/query` with `where=1=1`, selected name/ID/type
-fields, `outSR=4326`, `returnGeometry=true`, and `f=geojson`. Metadata supplies field
-names; records are paginated in object-ID order. Layer 7 is excluded to avoid
-duplicating hamlets. No community coordinates are hardcoded as fallback data.
+This UI queries **layer 0 only: Hamlet, Locality, Townsite**, using `/0/query` with
+`where=1=1`, selected name/ID/type fields, `outSR=4326`, `returnGeometry=true`, and
+`f=geojson`. Metadata supplies field names; records are paginated in object-ID order.
+Only named, finite, in-range Point geometries are accepted. There are no hardcoded
+fallback community coordinates. Cities and towns available as municipal polygons
+are excluded from this point dataset; "nearest community" means nearest within
+this layer's coverage. The reusable API fetcher still supports its original layer
+selection for other callers.
 
-Point communities use Haversine distance with Earth radius 6371.0088 km. Municipal
-polygons use zero distance inside/on the area, otherwise the minimum spherical
-distance to boundary segments (minor great-circle arcs, including hole boundaries).
-These are straight-line distances, not travel distances. Polygon markers use an
-interior representative point; connecting lines terminate at the closest boundary
-point. JSON community coordinates are marker positions, not distance endpoints.
-Ranking uses full precision and stable tie breakers; displayed distances use two
-decimal places. Current municipal geometry is used even for historical fires.
+Every displayed fire receives `nearest_community`, `nearest_community_distance_km`,
+and `community_proximity_rank`. Haversine distance uses Earth radius 6371.0088 km,
+using official fire coordinates and the API's actual community point coordinates.
+The minimum unrounded distance determines the nearest point; community ties sort
+by name, then source ID. Separate sequential proximity ranks sort by unrounded
+distance, then fire ID. RF ranks, probabilities, and table order are unchanged.
+This is not travel distance, exposure scoring, or a combined ranking.
+
+The daily table compares distances/ranks, and the selected-fire card includes all
+three fields. The selected-fire map uses the same points and shows its nearest five
+with point-to-point lines, without municipal boundaries or centroid approximations.
+Distances display to two decimal places; frontend records retain full precision.
+Missing/invalid fire coordinates, unavailable data, or an empty usable point dataset
+produce `None` in proximity fields and `N/A` in the UI; no proximity rank is assigned.
+Invalid community rows are ignored. Refresh recalculates all fire enrichment and
+selected-fire results against the refreshed points. Current point data is used for
+historical fires. The original polygon-distance helper remains available for other
+callers, but this UI does not use it.
 
 Modules: `app/community_service.py` handles retrieval/normalization, `app/geo.py`
-handles distances/results, and `app/map_view.py` creates the map.
+handles distances/results, `app/proximity_service.py` enriches ranked fires, and `app/map_view.py` creates the map.
 
 Run the offline test suite:
 
@@ -157,4 +171,5 @@ Confirm the assessment-date selector has only July 16, change the wildfire selec
 inspect its detail card, and test `Refresh community data`. Offline tests cover the
 ID join, date filter, field allowlist, missing values/coordinates, selection, geometry,
 pagination, empty layers, and partial/network failures. A local-input test checks the
-49 real records and unchanged ranks.
+49 real records and unchanged ranks. Point-enrichment tests cover known distances,
+invalid coordinates, deterministic ties, separate proximity ranks, and refresh.

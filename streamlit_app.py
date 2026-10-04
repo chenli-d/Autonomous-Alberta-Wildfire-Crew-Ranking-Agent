@@ -8,14 +8,15 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from app.community_service import fetch_communities
-from app.geo import build_result, find_nearest_communities
+from app.geo import build_result
 from app.map_view import create_map, create_overview_map
 from app.ranking_service import AVAILABLE_DATES, load_rankings, map_record
+from app.proximity_service import enrich_fire_proximity, valid_community_points, find_nearest_community_points
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading Alberta communities…")
 def load_communities():
-    result = fetch_communities()
+    result = fetch_communities(layer_ids=(0,))
     # Do not cache failed or partial fetches as a successful snapshot.
     if result.errors:
         raise LookupError(result)
@@ -35,19 +36,20 @@ def show_fire_details(record):
         "Weather / fire behaviour": ("FIRE_SPREAD_RATE", "TEMPERATURE", "RELATIVE_HUMIDITY", "WIND_SPEED"),
         "Fire characteristics": ("FIRE_TYPE", "FUEL_TYPE", "FIRE_POSITION_ON_SLOPE", "WEATHER_CONDITIONS_OVER_FIRE", "FOREST_AREA"),
         "Location": ("LATITUDE", "LONGITUDE"),
+        "Community proximity": ("nearest_community", "nearest_community_distance_km", "community_proximity_rank"),
     }
     with st.container(border=True):
         st.subheader(f"Fire details: {record['fire_id']}")
         for heading, fields in groups.items():
             st.markdown(f"**{heading}**")
-            st.dataframe([{"Field": field, "Value": str(record[field]) if record.get(field) is not None else "N/A"}
+            st.dataframe([{"Field": field, "Value": (f"{record[field]:.2f}" if field == "nearest_community_distance_km" else str(record[field])) if record.get(field) is not None else "N/A"}
                           for field in fields if field != "status" or field in record], hide_index=True)
 
 
 def main():
     st.set_page_config(page_title="Alberta wildfire community proximity", layout="wide")
     st.title("Alberta wildfire community proximity")
-    st.caption("Deterministic straight-line distances. Point communities use point-to-point distance; municipal polygons use distance to the community area (zero inside). Marker positions are representative locations.")
+    st.caption("Deterministic point-to-point distances to Alberta Hamlet/Locality/Townsite points (layer 0). Cities and towns supplied as municipal polygons are not included. Proximity rank does not change RF ranking.")
     selected_day = st.selectbox("Assessment day", AVAILABLE_DATES,
                                 format_func=lambda day: day.isoformat(), key="supported_assessment_day")
     st.subheader(f"Fires assessed on {selected_day.isoformat()}")
@@ -67,8 +69,29 @@ def main():
     if not records:
         st.info("No ranked fires available for this assessment day.")
         return
-    table_fields = ("fire_id", "rank", "rf_probability", "baseline_rank")
-    st.dataframe([{key: r[key] if r[key] is not None else "N/A" for key in table_fields} for r in records], hide_index=True)
+    if st.button("Refresh community data"):
+        load_communities.clear()
+        st.session_state.pop("community_point_fetch", None)
+    if "community_point_fetch" not in st.session_state or time.time() - st.session_state.get("community_point_fetch_time", 0) >= 3600:
+        try:
+            st.session_state.community_point_fetch = load_communities()
+        except LookupError as error:
+            st.session_state.community_point_fetch = error.args[0]
+        st.session_state.community_point_fetch_time = time.time()
+    fetched = st.session_state.community_point_fetch
+    if fetched.errors:
+        st.warning("Community point source unavailable. Proximity values are N/A; use Refresh to retry.")
+        for error in fetched.errors:
+            st.caption(error)
+    if fetched.skipped:
+        st.warning(f"Skipped {fetched.skipped} malformed or invalid community records.")
+    points = valid_community_points(fetched.communities) if not fetched.errors else []
+    if not points and not fetched.errors:
+        st.warning("Community point source has no usable records. Proximity values are N/A.")
+    records = enrich_fire_proximity(records, points)
+    table_fields = ("fire_id", "rank", "rf_probability", "baseline_rank", "nearest_community_distance_km", "community_proximity_rank")
+    st.dataframe([{key: r[key] if r[key] is not None else "N/A" for key in table_fields} for r in records], hide_index=True,
+                 column_config={"nearest_community_distance_km": st.column_config.NumberColumn(format="%.2f")})
     locations = [mapped for r in records if (mapped := map_record(r)) is not None]
     st.caption(f"{len(records)} ranked fires; {len(locations)} valid locations; {len(records)-len(locations)} missing or invalid locations.")
     if locations:
@@ -88,23 +111,7 @@ def main():
         st.info("This fire has missing or invalid official coordinates. Community proximity is unavailable.")
         return
     st.subheader(f"Community proximity: {fire['fire_id']}")
-    if st.button("Refresh community data"):
-        load_communities.clear()
-        st.session_state.pop("community_fetch", None)
-    if "community_fetch" not in st.session_state or time.time() - st.session_state.get("community_fetch_time", 0) >= 3600:
-        try:
-            st.session_state.community_fetch = load_communities()
-        except LookupError as error:
-            st.session_state.community_fetch = error.args[0]
-        st.session_state.community_fetch_time = time.time()
-    fetched = st.session_state.community_fetch
-    if fetched.errors:
-        st.warning("Incomplete community lookup: nearest results only cover successfully loaded layers. Use Refresh to retry.")
-        for error in fetched.errors:
-            st.caption(error)
-    if fetched.skipped:
-        st.warning(f"Skipped {fetched.skipped} malformed or invalid community records.")
-    nearby = find_nearest_communities(fire["latitude"], fire["longitude"], fetched.communities)
+    nearby = find_nearest_community_points(fire["latitude"], fire["longitude"], points)
     result = build_result(fire["fire_id"], fire["latitude"], fire["longitude"], fire["hazard_score"], nearby)
     st_folium(create_map(fire["fire_id"], fire["latitude"], fire["longitude"], nearby, fire["hazard_score"]),
               height=580, use_container_width=True, returned_objects=[], key="selected_proximity")

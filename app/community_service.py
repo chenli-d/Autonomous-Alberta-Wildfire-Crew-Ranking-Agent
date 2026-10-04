@@ -64,12 +64,13 @@ def _normalize(feature, layer_id, name_field, id_field):
             "source_id": f"{layer_id}:{identifier}"}
 
 
-def fetch_communities(session=None):
+def fetch_communities(session=None, layer_ids=None):
+    selected_layers = LAYERS if layer_ids is None else {layer: LAYERS[layer] for layer in layer_ids}
     owned = session is None
     session = session or create_session()
     result = CommunityFetch()
     try:
-        for layer_id, layer_name in LAYERS.items():
+        for layer_id, layer_name in selected_layers.items():
             try:
                 url = f"{SERVICE_URL}/{layer_id}"
                 metadata = _get(session, url, {"f": "json"})
