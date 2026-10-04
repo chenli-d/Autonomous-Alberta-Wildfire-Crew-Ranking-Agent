@@ -5,6 +5,7 @@ import time
 import subprocess
 from datetime import date
 from pathlib import Path
+from uuid import uuid4
 
 import streamlit as st
 from streamlit_folium import st_folium
@@ -35,22 +36,21 @@ def show_review_candidates(records, assessment, run_review=False):
     try:
         if assessment["review_error"]:
             raise ValueError(assessment["review_error"])
-        context = assessment["context"]
+        context = {**assessment["context"], "run_id": assessment["run_id"],
+                   "settings": assessment["settings"]}
         review_records = [{**row, "rank": assessment["annual_ranks"][row["fire_id"]]} for row in records]
         allocated_records = attach_allocation_context(review_records, context)
         candidates = select_review_candidates(allocated_records, context["H"], context["H_cut"])
     except (OSError, ValueError, KeyError, TypeError, csv.Error) as error:
-        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
+        for key in ("agent_snapshot", "agent_trace", "human_decision", "final_ranking", "final_crew_assignments"):
             st.session_state.pop(key, None)
         st.warning(f"Review shortlist unavailable: {error}")
         return
     st.caption(f"H = {context['H']}; H_cut = {context['H_cut']}; {len(candidates)} review candidates.")
     if not candidates:
-        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
-            st.session_state.pop(key, None)
         st.info("No review candidates available.")
-        return
-    st.dataframe([{"fire_id": record["fire_id"], "Daily allocation RF rank": record["allocation_rank"],
+    if candidates:
+        st.dataframe([{"fire_id": record["fire_id"], "Daily allocation RF rank": record["allocation_rank"],
                    "Annual RF rank": record.get("rank"), "rf_probability": record.get("rf_probability"),
                    "Current allocation status": record["status"], "Nearest community": record.get("nearest_community") or "N/A",
                    "Distance (km)": record.get("nearest_community_distance_km") if record.get("nearest_community_distance_km") is not None else "N/A",
@@ -93,11 +93,12 @@ def main():
         submitted = st.form_submit_button("Run assessment")
     run_review = False
     if submitted:
-        for key in ("assessment", "agent_snapshot", "agent_trace", "final_crew_assignments"):
+        for key in ("assessment", "agent_snapshot", "agent_trace", "human_decision", "final_ranking", "final_crew_assignments"):
             st.session_state.pop(key, None)
         try:
             with st.spinner("Training model and assessing wildfire crews…"):
-                st.session_state.assessment = run_assessment(root, train_start, train_end, test_year, assessment_date, crews)
+                assessment = run_assessment(root, train_start, train_end, test_year, assessment_date, crews)
+                st.session_state.assessment = {**assessment, "run_id": str(uuid4())}
             run_review = True
         except subprocess.CalledProcessError as error:
             st.error(f"Model assessment failed (exit code {error.returncode}). Check the selected inputs and model diagnostics.")
@@ -122,14 +123,13 @@ def main():
     if diagnostics["invalid_dates"]:
         st.warning(f"Skipped {diagnostics['invalid_dates']} records with missing or invalid assessment dates.")
     if not records:
-        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
-            st.session_state.pop(key, None)
         st.info("No ranked fires available for this assessment day.")
+        show_review_candidates([], assessment, run_review=run_review)
         return
     if st.button("Refresh community data"):
         load_communities.clear()
         st.session_state.pop("community_point_fetch", None)
-        for key in ("agent_snapshot", "agent_trace", "final_crew_assignments"):
+        for key in ("agent_snapshot", "agent_trace", "human_decision", "final_ranking", "final_crew_assignments"):
             st.session_state.pop(key, None)
     if "community_point_fetch" not in st.session_state or time.time() - st.session_state.get("community_point_fetch_time", 0) >= 3600:
         try:
@@ -148,6 +148,7 @@ def main():
     if not points and not fetched.errors:
         st.warning("Community point source has no usable records. Proximity values are N/A.")
     records = enrich_fire_proximity(records, points)
+    st.subheader("Current model daily ranking")
     table_fields = ("fire_id", "rank", "rf_probability", "baseline_rank", "nearest_community_distance_km", "community_proximity_rank")
     st.dataframe([{key: r[key] if r[key] is not None else "N/A" for key in table_fields} for r in records], hide_index=True,
                  column_config={"nearest_community_distance_km": st.column_config.NumberColumn(format="%.2f")})

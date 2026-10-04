@@ -151,6 +151,8 @@ class CombinedUITests(unittest.TestCase):
             self.assertEqual([b.label for b in app.button], ["Run assessment"])
             app.button[0].click().run(timeout=30)
             self.assertFalse(app.exception)
+            first_run_id = app.session_state["assessment"]["run_id"]
+            self.assertEqual(app.session_state["agent_trace"]["run_id"], first_run_id)
             model.assert_called_once_with(ROOT, 2022, 2023, 2024, DAY, 10)
             agent.assert_called_once()
             self.assertEqual(agent.call_args.args[0]["last_kept"]["rank"], 21)
@@ -162,6 +164,8 @@ class CombinedUITests(unittest.TestCase):
             app.button[0].click().run(timeout=30)
             self.assertEqual(model.call_count, 2)
             self.assertEqual(agent.call_count, 2)
+            self.assertNotEqual(app.session_state["assessment"]["run_id"], first_run_id)
+            self.assertEqual(app.session_state["agent_trace"]["run_id"], app.session_state["assessment"]["run_id"])
             self.assertEqual(app.dataframe[0].value.iloc[0]["rf_probability"], .9)
             self.assertNotIn("Run agent review", [b.label for b in app.button])
 
@@ -176,7 +180,113 @@ class CombinedUITests(unittest.TestCase):
             app.button[0].click().run(timeout=30)
             model.assert_called_once_with(ROOT, 2018, 2021, 2022, date(2022, 6, 1), 15)
 
-    def test_combined_swap_requires_apply_and_does_not_repeat_run(self):
+    def test_changed_crews_reassess_with_current_context(self):
+        def model_result(root, start, end, year, day, crews):
+            result = self.snapshot()
+            cut = int(.8 * crews)
+            result["settings"]["crews"] = crews
+            result["records"] = [{"fire_id": f"2024:F{i}", "rank": i, "rf_probability": .8,
+                                   "baseline_rank": i, "ASSESSMENT_HECTARES": 3.5,
+                                   "status": "kept" if i <= cut else "displaced" if i <= crews else "no_crew",
+                                   "LATITUDE": 56, "LONGITUDE": -112, "assessment_date": str(DAY)}
+                                  for i in range(1, 6)]
+            result["annual_ranks"] = {row["fire_id"]: row["rank"] + 20 for row in result["records"]}
+            result["context"] = {"allocation_date": str(DAY), "H": crews, "H_cut": cut,
+                                 "allocations": {row["fire_id"]: {"allocation_rank": row["rank"], "status": row["status"]}
+                                                 for row in result["records"]}}
+            return result
+        response = json.dumps({"decision": "KEEP_ORIGINAL", "promote_fire_id": None,
+                               "displace_fire_id": None, "reason": "Keep current ranking", "evidence": []})
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), \
+             patch("app.assessment_service.run_assessment", side_effect=model_result) as model, \
+             patch("app.agent_view.review_crew_cut", return_value=response) as agent:
+            app = self.app()
+            app.number_input[3].set_value(4)
+            app.button[0].click().run(timeout=30)
+            first_id = app.session_state["agent_trace"]["run_id"]
+            first_input = agent.call_args.args[0]
+            self.assertEqual((first_input["H"], first_input["H_cut"]), (4, 3))
+            self.assertEqual(first_input["last_kept"]["fire_id"], "2024:F3")
+            app.number_input[3].set_value(3)
+            app.button[0].click().run(timeout=30)
+            self.assertFalse(app.exception)
+            current = agent.call_args.args[0]
+            self.assertEqual(model.call_count, 2)
+            self.assertEqual(agent.call_count, 2)
+            self.assertEqual((current["H"], current["H_cut"], current["assessment_date"]), (3, 2, str(DAY)))
+            self.assertEqual(current["last_kept"]["fire_id"], "2024:F2")
+            self.assertEqual(current["current_model_ranking"][2]["status"], "displaced")
+            self.assertEqual(current["current_model_ranking"][3]["status"], "no_crew")
+            self.assertEqual(current["current_model_ranking"][0]["ASSESSMENT_HECTARES"], 3.5)
+            self.assertNotEqual(app.session_state["agent_trace"]["run_id"], first_id)
+            self.assertEqual(app.session_state["agent_trace"]["settings"]["crews"], 3)
+
+    def test_identical_reassessments_have_distinct_run_ids(self):
+        response = json.dumps({"decision": "KEEP_ORIGINAL", "promote_fire_id": None,
+                               "displace_fire_id": None, "reason": "Keep", "evidence": []})
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), \
+             patch("app.assessment_service.run_assessment", return_value=self.snapshot()), \
+             patch("app.agent_view.review_crew_cut", return_value=response) as agent:
+            app = self.app()
+            app.button[0].click().run(timeout=30)
+            first = app.session_state["assessment"]["run_id"]
+            app.button[0].click().run(timeout=30)
+            self.assertNotEqual(app.session_state["assessment"]["run_id"], first)
+            self.assertEqual(agent.call_count, 2)
+
+    def test_stale_run_and_community_refresh_hide_proposal_without_request(self):
+        response = json.dumps({"decision": "KEEP_ORIGINAL", "promote_fire_id": None,
+                               "displace_fire_id": None, "reason": "Keep", "evidence": []})
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), \
+             patch("app.assessment_service.run_assessment", return_value=self.snapshot()), \
+             patch("app.agent_view.review_crew_cut", return_value=response) as agent, \
+             patch("app.community_service.fetch_communities", return_value=CommunityFetch(communities=[community()])):
+            app = self.app()
+            app.button[0].click().run(timeout=30)
+            trace = dict(app.session_state["agent_trace"])
+            app.session_state["agent_trace"] = {**trace, "run_id": "obsolete-run"}
+            app.run()
+            self.assertNotIn("agent_trace", app.session_state)
+            app.button[0].click().run(timeout=30)
+            self.assertIn("agent_trace", app.session_state)
+            app.button[1].click().run(timeout=30)
+            self.assertNotIn("agent_trace", app.session_state)
+            self.assertTrue(any("Run assessment again" in item.value for item in app.info))
+            self.assertEqual(agent.call_count, 2)
+
+    def test_no_eligible_boundary_deterministic_keep_persists(self):
+        for kind in ("empty", "zero_cut", "excess_crews", "no_challengers"):
+            snapshot = self.snapshot()
+            context = snapshot["context"]
+            if kind == "empty":
+                snapshot["records"] = []
+                snapshot["annual_ranks"] = {}
+                context["allocations"] = {}
+            elif kind == "zero_cut":
+                context.update(H=1, H_cut=0)
+                for row in snapshot["records"]:
+                    row["status"] = "displaced" if row["rank"] == 1 else "no_crew"
+                    context["allocations"][row["fire_id"]]["status"] = row["status"]
+            else:
+                context.update(H=10 if kind == "excess_crews" else 3, H_cut=8 if kind == "excess_crews" else 2)
+                for row in snapshot["records"]:
+                    row["status"] = "kept"
+                    context["allocations"][row["fire_id"]]["status"] = "kept"
+            with patch("app.assessment_service.run_assessment", return_value=snapshot), \
+                 patch("app.agent_view.review_crew_cut") as agent:
+                app = self.app()
+                app.button[0].click().run(timeout=30)
+                self.assertFalse(app.exception, kind)
+                trace = app.session_state["agent_trace"]
+                self.assertEqual(trace["recommendation"], "KEEP", kind)
+                self.assertEqual(trace["status"], "deterministic_keep", kind)
+                self.assertEqual([row["fire_id"] for row in trace["proposed_ranking"]],
+                                 [row["fire_id"] for row in snapshot["records"]])
+                app.run()
+                self.assertEqual(app.session_state["agent_trace"], trace)
+                agent.assert_not_called()
+
+    def test_combined_swap_is_proposal_only_and_does_not_repeat_run(self):
         response = json.dumps({"decision": "SWAP", "promote_fire_id": "2024:F2",
                                "displace_fire_id": "2024:F1", "reason": "Boundary trade-off",
                                "evidence": ["Similar probabilities"]})
@@ -185,12 +295,14 @@ class CombinedUITests(unittest.TestCase):
              patch("app.agent_view.review_crew_cut", return_value=response) as agent:
             app = self.app()
             app.button[0].click().run(timeout=30)
-            self.assertTrue(app.session_state["final_crew_assignments"]["2024:F1"])
-            next(b for b in app.button if b.label == "Apply swap").click().run(timeout=30)
             self.assertFalse(app.exception)
-            self.assertFalse(app.session_state["final_crew_assignments"]["2024:F1"])
-            self.assertTrue(app.session_state["final_crew_assignments"]["2024:F2"])
-            self.assertTrue(next(b for b in app.button if b.label == "Apply swap").disabled)
+            trace = app.session_state["agent_trace"]
+            self.assertEqual(trace["recommendation"], "RERANK")
+            self.assertEqual([r["fire_id"] for r in trace["proposed_ranking"]], ["2024:F2", "2024:F1"])
+            self.assertEqual(app.dataframe[0].value["fire_id"].tolist(), ["2024:F1", "2024:F2"])
+            self.assertEqual([b.label for b in app.button], ["Run assessment", "Refresh community data", "Accept agent reranking", "Keep model ranking"])
+            self.assertNotIn("final_crew_assignments", app.session_state)
+            app.run()
             model.assert_called_once()
             agent.assert_called_once()
 

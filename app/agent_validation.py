@@ -1,7 +1,7 @@
 """Deterministic validation and copy-only crew assignment application."""
 import json
 
-from app.agent_review import RESPONSE_SCHEMA
+from app.agent_review import RESPONSE_SCHEMA, INPUT_FIELDS
 from app.review_service import select_review_candidates
 
 
@@ -18,7 +18,7 @@ def original_assignments(records, H_cut):
     if type(H_cut) is not int or H_cut < 0:
         raise ValueError("Invalid crew count.")
     result = {r["fire_id"]: r["status"] == "kept" for r in records}
-    if len(result) != len(records) or sum(result.values()) != H_cut:
+    if len(result) != len(records) or sum(result.values()) != min(H_cut, len(records)):
         raise ValueError("Original allocation does not match crew count.")
     return result
 
@@ -50,9 +50,23 @@ def validate_agent_decision(raw, records, H, H_cut):
         final[displace], final[promote] = False, True
         if {k for k in final if final[k] != original[k]} != {promote, displace}:
             raise ValueError("Swap changed unrelated crew assignments.")
-    if sum(final.values()) != H_cut:
+    if sum(final.values()) != min(H_cut, len(records)):
         raise ValueError("Crew count changed.")
     return dict(decision), final
+
+
+def build_ranking_proposal(raw, records, H, H_cut):
+    """Validate one boundary swap, then construct a separate daily ranking proposal."""
+    decision, _ = validate_agent_decision(raw, records, H, H_cut)
+    ordered = sorted(records, key=lambda row: row["allocation_rank"])
+    if decision["decision"] == "SWAP":
+        positions = {row["fire_id"]: index for index, row in enumerate(ordered)}
+        a, b = positions[decision["promote_fire_id"]], positions[decision["displace_fire_id"]]
+        ordered[a], ordered[b] = ordered[b], ordered[a]
+    proposal = [{**{key: row[key] for key in INPUT_FIELDS if key in row},
+                 "model_daily_rank": row["allocation_rank"], "proposed_rank": index}
+                for index, row in enumerate(ordered, start=1)]
+    return decision, proposal
 
 
 def apply_agent_decision(raw, records, H, H_cut):

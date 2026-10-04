@@ -232,37 +232,66 @@ Remove-Variable reviewSecret
 & "$mapEnv\Scripts\python.exe" -m streamlit run streamlit_app.py
 ```
 
-**Run assessment** also triggers the existing boundary review once after successful
-model execution and proximity enrichment. There is no separate Run agent review
-button. Review sends one request, with a 10-second connection timeout and
-60-second read timeout, no tools and no automatic retries. Missing credentials skip review with an explanatory message while retaining fresh RF results. API failure, refusal, incomplete output, or invalid JSON
-preserves the original allocation. No eligible boundary candidates also skip review. The agent receives only the last-kept fire and
-shortlisted no-crew challengers: IDs, annual/daily RF ranks, probability, baseline
-rank, initial assessment/weather/fire-characteristic fields, nearest community,
-distance, proximity rank, review reasons and saved status. Coordinates and arbitrary
-source columns are excluded, including `y`, `CURRENT_SIZE` and future outcomes.
+**Run assessment** triggers the existing boundary review once after each successful
+model run and fresh result loading, including repeated runs for the same day or
+changed crew counts. Each assessment gets a unique run ID. The agent trace must
+match that run ID and the fingerprint of submitted settings and sanitized input
+before it can be displayed. Ordinary UI reruns do not repeat model or API calls.
 
-The exact response keys are `decision`, `promote_fire_id`, `displace_fire_id`,
-`reason`, and `evidence`. `KEEP_ORIGINAL` requires null IDs. A `SWAP` must promote
-one shortlisted `displaced`/`no_crew` fire and displace only the saved last-kept fire.
-Code independently validates the response and simulates two changed crew flags
-(one crew transfer), with exactly `H_cut` assignments and no rank/status mutations.
-The prompt prefers keeping RF allocation when evidence is ambiguous; proximity
-alone is insufficient, and no numeric thresholds or causal RF explanations are invented.
+Review sends one request with a 10-second connection timeout and 60-second read
+timeout, no tools, and no automatic retries. Its input includes assessment date,
+available crews `H`, reduced crews `H_cut`, the complete current daily model ranking,
+allocation statuses, and allowlisted fire features. Annual ranks and the boundary
+shortlist are retained separately. In `current_model_ranking`, `rank` is daily RF
+rank and `annual_rank` is annual RF rank; in boundary records, `rank` remains annual
+RF rank and `allocation_rank` is daily RF rank. Coordinates and arbitrary source
+columns are excluded, including `y`, `CURRENT_SIZE`, and future outcomes.
 
-A valid swap is a proposal until you click **Apply swap**. Application revalidates
-the proposal and changes a separate session-only crew-assignment map. The UI shows
-before/after assignments and final allocation alongside unchanged saved statuses.
-Saved CSVs and RF ranks are never rewritten. Apply is disabled after application.
-A new assessment starts review from its fresh RF allocation; community Refresh or
-a changed review fingerprint invalidates the proposal and restores original session
-allocation. Editing unsubmitted form controls does not change completed results.
+The exact response keys remain `decision`, `promote_fire_id`, `displace_fire_id`,
+`reason`, and `evidence`. `KEEP_ORIGINAL` requires null IDs and is displayed as
+**KEEP**. A validated `SWAP` is displayed as **RERANK**: it may promote only one
+shortlisted `displaced`/`no_crew` fire and displace only the last-kept fire. The full
+ranking supplies context, not permission for broader reranking. The existing prompt
+prefers keeping RF allocation when evidence is ambiguous; proximity alone is
+insufficient, and no numeric thresholds or causal RF explanations are invented.
 
-`Download agent review trace` preserves sanitized input, policy/version, model,
-raw structured response, validation result and final assignments/action. No API
-keys or headers are included. Trace/session state lasts only for the browser session
-unless downloaded. `app/agent_review.py` isolates the API, `app/agent_validation.py`
-validates/applies copies, and `app/agent_view.py` implements the explicit review UI.
-Offline tests mock KEEP, SWAP, invalid/API failures, missing credentials, explicit
-application and stale-review handling. A live decision requires a configured API key;
-it is not inferred from offline test responses.
+The UI shows the current model ranking, recommendation, concise reasoning/evidence,
+and a complete proposed daily ranking. KEEP copies the model order; RERANK exchanges
+only the promoted and displaced fires' daily positions. Proposed ranks are separate
+from model ranks and saved statuses. A RERANK proposal shows the promotion/displacement and **Pending human review**.
+The human chooses **Accept agent reranking** or **Keep model ranking**. Acceptance
+revalidates the stored response against the current records and crew context, then
+stores a separate final ranking containing only the validated boundary swap and
+shows **Agent proposal accepted**. Keeping the model stores its original order and
+shows **Original model ranking retained**. Both buttons lock after the choice until
+reassessment. Before a choice, no final ranking is stored. Agent KEEP shows **No
+reranking proposed**, retains model order as the final ranking, and has no decision
+buttons. Final rank is shown separately from original RF ranks and saved statuses.
+Neither the agent nor these human actions rewrite the model-generated CSV, model
+records, RF ranks, or saved allocation statuses.
+
+Missing credentials, API failures, refusals, incomplete responses, and invalid
+proposals retain fresh model results and show an unavailable review status without
+claiming KEEP. Empty assessments or no eligible boundary swaps produce an explicitly
+labeled deterministic KEEP with a reason, without calling the agent API. Excess
+crew capacity is valid: the original kept count is `min(H_cut, number_of_fires)`.
+
+Human decision and final ranking are session-only and bound to the assessment run
+ID and proposal fingerprint. Starting another reassessment clears the previous
+proposal, human decision, and final ranking before model execution, even if the new
+run fails. Community Refresh, unavailable context, or a changed run/fingerprint
+also clears human state without automatically calling the agent again; use Run
+assessment to reassess. Failed acceptance validation leaves review pending with no
+final ranking. Editing
+unsubmitted controls does not change completed results.
+
+`Download agent review trace` preserves run identity, submitted settings, sanitized
+input, policy/version, model, raw structured response, validation result, normalized
+KEEP/RERANK recommendation, proposed ranking, human decision, and final ranking. No API keys or headers are included.
+Trace/session state lasts only for the browser session unless downloaded.
+`app/agent_review.py` isolates the existing API flow; `app/agent_validation.py`
+validates and constructs copied proposals; `app/agent_view.py` displays the assessment.
+Offline tests cover crew-count changes, identical repeated assessments, run matching,
+KEEP/RERANK proposals, unchanged model data, failures, empty/excess-capacity cases,
+community refresh, human acceptance/rejection, decision locking, and CSV preservation. API calls are mocked; a live
+agent decision requires a configured key and is not inferred from test responses.
