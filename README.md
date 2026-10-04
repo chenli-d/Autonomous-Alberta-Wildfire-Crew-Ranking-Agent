@@ -79,8 +79,23 @@ Data notes: [`data/README.md`](data/README.md). **Python 3.10+** (3.11 is best).
 
 This standalone app shows the nearest five Alberta communities to one wildfire.
 It does not run or change the wildfire model, score hazards, or provide response advice.
-The default is Deep Lake (`2024:PWF076`), started July 16, 2024; coordinates are read
-from the supplied CSV. An optional hazard score is passed through unchanged.
+Select a calendar day from `ASSESSMENT_DATETIME` (assessment date), not the fire start
+date or all fires active that day. The default day
+is July 16, 2024 (or the latest available date if absent). The overview shows all valid
+daily wildfire locations without community lines. Select one wildfire from the
+dropdown to see its separate community-proximity map, table, and downloadable JSON.
+The first fire ID in sorted order is selected by default.
+The bundled subset omits assessment timestamps, so the app joins them from the existing
+local `data/raw/fp-historical-wildfire-data-2006-2025.csv` using `YEAR` and `FIRE_NUMBER`.
+Only the original subset's fires are shown; its coordinates and optional scores are
+preserved. Missing/unmatched assessment dates are skipped, without falling back to
+fire start dates. Both files' modification times invalidate the data cache.
+The raw CSV is required locally and remains excluded from Git; no download is performed.
+Missing/invalid coordinates are skipped with a count; invalid dates are reported.
+Marker popups show fire ID and a hazard score when available in the wildfire CSV:
+finite `hazard_score` takes precedence over finite `rf_probability`. The current
+CSV has neither column. Scores are passed through unchanged; model outputs are
+not loaded and no model is run.
 
 From this folder, using a working Python 3.10+ installation:
 
@@ -91,7 +106,7 @@ python -m venv $mapEnv
 & "$mapEnv\Scripts\python.exe" -m streamlit run streamlit_app.py
 ```
 
-Open the local URL printed by Streamlit. Submit a fire ID and coordinates, inspect
+Open the local URL printed by Streamlit. Select a day and wildfire, inspect
 the map and table, and download the result JSON. `Refresh community data` retries
 failed requests and clears the one-hour successful-data cache. Internet access is
 required for the Alberta API and OpenStreetMap tiles. Partial lookups are explicitly
@@ -126,6 +141,8 @@ Run the offline test suite:
 ```
 
 For a live smoke check, launch the app with the default sample, confirm five rows
-and corresponding map features, then test an invalid latitude, an empty hazard
-score, and `Refresh community data`. Offline tests mock API responses and cover
+and corresponding proximity map features, plus 18 valid fire markers in the overview.
+Change the wildfire and day selectors and test `Refresh community data`.
+Offline tests mock API responses and cover daily filtering, invalid coordinates,
+optional scores, selector resets, empty days, and
 geometry, pagination, invalid records, empty layers, and partial/network failures.
